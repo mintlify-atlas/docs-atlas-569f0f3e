@@ -1,80 +1,306 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quick Start
+description: Get started with tsim in minutes - create your first circuit, compile a sampler, and generate samples
 ---
 
-## Get started in three steps
+# Quick Start
 
-Get your documentation site running locally and make your first customization.
+This guide will walk you through creating your first quantum circuit with tsim, compiling it into a sampler, and generating measurement samples.
 
-### Step 1: Set up your local environment
+## Your First Circuit
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
+Let's start with a simple example that demonstrates the key features of tsim:
+
+```python
+import tsim
+
+# Create a circuit with Clifford and non-Clifford gates
+circuit = tsim.Circuit("""
+    H 0
+    CNOT 0 1
+    T 0
+    M 0 1
+""")
+
+# Compile into a measurement sampler
+sampler = circuit.compile_sampler()
+
+# Generate 100 measurement samples
+samples = sampler.sample(shots=100)
+
+print(samples)
+```
+
+<Tip>
+The circuit string syntax is identical to Stim's format, making it easy to port existing Stim circuits to tsim.
+</Tip>
+
+## Step-by-Step Example
+
+Let's build a more complete example that showcases tsim's capabilities:
+
+<Steps>
+
+<Step title="Import tsim">
+First, import the tsim library:
+
+```python
+import tsim
+import numpy as np
+```
+</Step>
+
+<Step title="Create a Circuit with Non-Clifford Gates">
+Build a circuit that includes T gates and rotation gates - operations not supported by pure Clifford simulators:
+
+```python
+circuit = tsim.Circuit("""
+    # Initialize qubits
+    RX 0
+    R 1
     
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
+    # Apply non-Clifford T gate
+    T 0
     
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 2: Deploy your changes
-
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
+    # Add some noise
+    PAULI_CHANNEL_1(0.1, 0.1, 0.2) 0 1
     
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+    # Clifford operations
+    H 0
+    CNOT 0 1
+    DEPOLARIZE2(0.01) 0 1
+    
+    # Measure
+    M 0 1
+    DETECTOR rec[-1] rec[-2]
+""")
+```
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+<Info>
+The circuit includes:
+- `RX` and `R`: Reset operations
+- `T`: Non-Clifford π/4 phase gate
+- `PAULI_CHANNEL_1`: Pauli noise channel
+- `H` and `CNOT`: Standard Clifford gates
+- `DEPOLARIZE2`: Two-qubit depolarizing noise
+- `DETECTOR`: Annotation for error detection
+</Info>
+</Step>
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+<Step title="Compile a Detector Sampler">
+For circuits with detector annotations, compile a detector sampler:
 
-### Step 3: Go live
+```python
+detector_sampler = circuit.compile_detector_sampler()
+```
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+This creates an optimized sampler that can efficiently generate detector samples.
+</Step>
 
-## Next steps
+<Step title="Generate Samples">
+Generate samples from your circuit:
 
-Now that you have your docs running, explore these key features:
+```python
+# Generate 1000 detector samples
+samples = detector_sampler.sample(shots=1000)
 
-<CardGroup cols={2}>
+print(f"Sample shape: {samples.shape}")
+print(f"First 10 samples:\n{samples[:10]}")
+```
 
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
+The result is a NumPy array where each row represents one shot and each column represents a detector outcome.
+</Step>
 
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
+</Steps>
 
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
+## Working with Rotation Gates
 
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
+tsim supports arbitrary rotation gates, allowing you to simulate a broader class of quantum circuits:
 
-</CardGroup>
+```python
+circuit = tsim.Circuit("""
+    # Rotation around X-axis by π/2
+    R_X(0.5) 0
+    
+    # Rotation around Y-axis by π/4
+    R_Y(0.25) 1
+    
+    # Rotation around Z-axis by π
+    R_Z(1.0) 2
+    
+    # General single-qubit unitary
+    U3(0.5, 0.25, 0.125) 3
+    
+    # Measure all qubits
+    M 0 1 2 3
+""")
+
+sampler = circuit.compile_sampler()
+samples = sampler.sample(shots=100)
+```
 
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+All rotation angles are specified as multiples of π. For example, `R_X(0.5)` applies a rotation by 0.5π = π/2.
 </Note>
+
+## Understanding Detector Samples
+
+One key difference from Stim is how tsim handles detector samples:
+
+```python
+# Circuit with a deterministic X error followed by measurement
+circuit = tsim.Circuit("""
+    X 0
+    M 0
+    DETECTOR rec[-1]
+""")
+
+sampler = circuit.compile_detector_sampler()
+samples = sampler.sample(shots=10)
+
+print(samples)
+# Output: All True values
+```
+
+<Warning>
+**Important difference from Stim**: tsim reports actual detector samples, while Stim reports detection *flips* (XORed with a noiseless reference). The same circuit in Stim would return all `False` values.
+</Warning>
+
+## Working with Observables
+
+You can also work with observable annotations:
+
+```python
+circuit = tsim.Circuit("""
+    R 0 1 2
+    X 2
+    M 0 1 2
+    DETECTOR rec[-2]
+    DETECTOR rec[-3]
+    OBSERVABLE_INCLUDE(0) rec[-1]
+""")
+
+sampler = circuit.compile_detector_sampler()
+
+# Sample detectors and observables separately
+detectors, observables = sampler.sample(
+    shots=100, 
+    separate_observables=True
+)
+
+print(f"Detector samples shape: {detectors.shape}")
+print(f"Observable samples shape: {observables.shape}")
+```
+
+## Performance Tips
+
+<CardGroup cols={2}>
+  <Card title="Use GPU Acceleration" icon="microchip">
+    Install tsim with CUDA support for significantly faster sampling on large circuits. See the [Installation guide](/installation) for details.
+  </Card>
+  
+  <Card title="Batch Your Samples" icon="layer-group">
+    Generate many samples in a single `sample()` call rather than multiple small calls. This is much more efficient.
+  </Card>
+  
+  <Card title="Minimize T-gate Count" icon="gauge">
+    Circuits with fewer T gates are faster to simulate due to lower stabilizer rank. Consider T-gate optimization strategies.
+  </Card>
+  
+  <Card title="Reuse Samplers" icon="recycle">
+    Compile your circuit once and reuse the sampler for multiple sampling runs with different shot counts.
+  </Card>
+</CardGroup>
+
+## Reproducible Results
+
+Set a random seed for reproducible sampling:
+
+```python
+circuit = tsim.Circuit("""
+    H 0
+    M 0
+""")
+
+# Same seed produces same samples
+sampler = circuit.compile_sampler(seed=42)
+samples1 = sampler.sample(shots=100)
+samples2 = sampler.sample(shots=100)  # Different from samples1
+
+# Reset with same seed
+sampler = circuit.compile_sampler(seed=42)
+samples3 = sampler.sample(shots=100)  # Identical to samples1
+```
+
+## Complete Example
+
+Here's a complete example putting it all together:
+
+```python
+import tsim
+import numpy as np
+
+# Create a circuit with various gate types and noise
+circuit = tsim.Circuit("""
+    # Initialize with Hadamard gates
+    H 0 1 2
+    
+    # Create entanglement
+    CNOT 0 1
+    CNOT 1 2
+    
+    # Apply T gates (non-Clifford)
+    T 0
+    T_DAG 1
+    
+    # Add rotation gates
+    R_Z(0.25) 2
+    
+    # Add noise
+    DEPOLARIZE1(0.01) 0 1 2
+    
+    # More gates
+    H 0
+    CNOT 0 1
+    
+    # Measure
+    M 0 1 2
+    
+    # Add detector annotations
+    DETECTOR rec[-1] rec[-2]
+    DETECTOR rec[-2] rec[-3]
+    OBSERVABLE_INCLUDE(0) rec[-1]
+""")
+
+# Compile the circuit
+sampler = circuit.compile_detector_sampler(seed=42)
+
+# Generate samples
+samples = sampler.sample(shots=1000, append_observables=True)
+
+print(f"Generated {len(samples)} samples")
+print(f"Sample shape: {samples.shape}")
+print(f"Detector firing rate: {np.mean(samples, axis=0)}")
+```
+
+## Next Steps
+
+Now that you've created your first tsim circuit, explore more advanced topics:
+
+<CardGroup cols={2}>
+  <Card title="API Reference" icon="book" href="/api">
+    Detailed documentation of all tsim classes and methods
+  </Card>
+  
+  <Card title="Circuit Construction" icon="code" href="/guides/circuit-construction">
+    Complete reference for supported gates and operations
+  </Card>
+  
+  <Card title="Tutorials" icon="lightbulb" href="/tutorials/encoding-demo">
+    More advanced examples and use cases
+  </Card>
+  
+  <Card title="GPU Acceleration" icon="gauge-high" href="/guides/gpu-acceleration">
+    Learn how to optimize your circuits for maximum performance
+  </Card>
+</CardGroup>

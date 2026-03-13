@@ -1,0 +1,174 @@
+---
+title: Installation
+description: Install tsim with pip or uv, including GPU acceleration support
+---
+
+# Installation
+
+tsim can be installed using pip or uv. GPU acceleration is available through optional CUDA dependencies.
+
+## Requirements
+
+- Python 3.10 or higher
+- (Optional) NVIDIA GPU with CUDA 12 or CUDA 13 for GPU acceleration
+
+## Basic Installation
+
+<CodeGroup>
+
+```bash pip
+pip install bloqade-tsim
+```
+
+```bash uv
+uv add bloqade-tsim
+```
+
+</CodeGroup>
+
+This installs tsim with CPU-only support, which is sufficient for many use cases and smaller circuits.
+
+## GPU Installation
+
+For significantly faster sampling on larger circuits, install tsim with GPU support. Choose the appropriate CUDA version for your system:
+
+### CUDA 13
+
+<CodeGroup>
+
+```bash pip
+pip install "bloqade-tsim[cuda13]"
+```
+
+```bash uv
+uv add "bloqade-tsim[cuda13]"
+```
+
+</CodeGroup>
+
+<Note>
+CUDA 13 support requires JAX 0.6.0 or higher. This is the recommended option for newer systems.
+</Note>
+
+### CUDA 12
+
+<CodeGroup>
+
+```bash pip
+pip install "bloqade-tsim[cuda12]"
+```
+
+```bash uv
+uv add "bloqade-tsim[cuda12]"
+```
+
+</CodeGroup>
+
+<Info>
+CUDA 12 support requires JAX 0.4.38 or higher. Use this option if your system has CUDA 12 installed.
+</Info>
+
+## Verify Installation
+
+After installation, verify that tsim is working correctly:
+
+```python
+import tsim
+
+# Create a simple circuit
+circuit = tsim.Circuit("""
+    H 0
+    CNOT 0 1
+    M 0 1
+""")
+
+# Compile and sample
+sampler = circuit.compile_sampler()
+samples = sampler.sample(shots=10)
+
+print(f"Successfully sampled {len(samples)} shots!")
+print(samples)
+```
+
+If this runs without errors, tsim is installed correctly!
+
+## GPU Verification
+
+To verify that GPU acceleration is working:
+
+```python
+import jax
+
+# Check available devices
+print(f"Available devices: {jax.devices()}")
+
+# Should show GPU devices if CUDA is properly installed
+# Example output: [cuda(id=0), cuda(id=1), ...]
+```
+
+<Warning>
+If you don't see GPU devices listed, ensure that:
+- Your NVIDIA drivers are up to date
+- CUDA is properly installed on your system
+- You installed the correct CUDA version for tsim
+</Warning>
+
+## Dependencies
+
+tsim is built on top of several high-quality libraries:
+
+- **JAX**: For efficient array operations and GPU acceleration
+- **Stim**: For circuit representation and Clifford operations
+- **pyzx**: For ZX-calculus operations and diagram simplification
+- **equinox**: For JAX-based neural network components
+- **numpy**: For numerical operations
+
+These dependencies are automatically installed when you install tsim.
+
+## Development Installation
+
+If you want to contribute to tsim or need the development dependencies:
+
+```bash
+git clone https://github.com/QuEraComputing/tsim.git
+cd tsim
+uv sync --group dev
+```
+
+This installs additional tools for testing, linting, and documentation building.
+
+## Troubleshooting
+
+### Import Errors
+
+If you encounter import errors, ensure that you're using Python 3.10 or higher:
+
+```bash
+python --version
+```
+
+### GPU Not Detected
+
+If GPU acceleration isn't working:
+
+1. Verify CUDA installation: `nvidia-smi`
+2. Check JAX GPU support: `python -c "import jax; print(jax.devices())"`
+3. Reinstall with the correct CUDA version
+
+### Version Conflicts
+
+If you encounter dependency conflicts, try creating a fresh virtual environment:
+
+```bash
+python -m venv tsim-env
+source tsim-env/bin/activate  # On Windows: tsim-env\Scripts\activate
+pip install bloqade-tsim
+```
+
+## Next Steps
+
+Now that tsim is installed, you're ready to create your first circuit:
+
+<Card title="Quick Start Guide" icon="rocket" href="/quickstart">
+  Learn how to create circuits, compile samplers, and generate samples
+</Card>

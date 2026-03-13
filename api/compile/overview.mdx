@@ -1,0 +1,91 @@
+---
+title: "Compilation Overview"
+description: "Internal compilation pipeline for transforming circuits into executable samplers"
+---
+
+The compilation module transforms prepared quantum circuits (represented as ZX diagrams) into efficient JAX-based sampling programs. This is the second major phase of the tsim pipeline, following circuit preparation.
+
+## Compilation Flow
+
+The compilation pipeline transforms circuits through these stages:
+
+1. **Component Decomposition** - Split prepared graphs into connected components
+2. **Output Plugging** - Create variants with different numbers of outputs plugged (for sequential or joint sampling)
+3. **Graph Reduction** - Apply ZX calculus simplifications with `pyzx_param.full_reduce`
+4. **Stabilizer Rank Decomposition** - Break non-Clifford circuits into sums of Clifford-like terms
+5. **JAX Compilation** - Convert scalar graphs into static-shaped JAX arrays for GPU acceleration
+
+## Key Data Types
+
+### SamplingGraph
+
+The input to the compilation pipeline. Represents a circuit that has been:
+- Parsed from Stim format
+- Converted to a ZX graph
+- Doubled (composed with adjoint)
+- Reduced via `zx.full_reduce`
+- Had its error basis transformed (Gaussian elimination: e → f)
+
+See `tsim.core.types.SamplingGraph` for details.
+
+### CompiledProgram
+
+The output of compilation. Contains:
+- Multiple `CompiledComponent` objects (one per connected component)
+- Output reordering information
+- Metadata about parameters and detectors
+
+See `tsim.core.types.CompiledProgram` for details.
+
+### CompiledScalarGraphs
+
+Low-level JAX-compatible representation of scalar graphs. Contains static-shaped arrays encoding:
+- Phase terms of various types (node phases, half-pi terms, pi-pairs, phase-pairs)
+- Parameter bit masks for efficient evaluation
+- Scalar factors and power-of-2 normalization
+
+See `tsim.compile.compile.CompiledScalarGraphs` for details.
+
+## Pipeline Functions
+
+<CardGroup cols={2}>
+  <Card title="compile_program()" icon="gears" href="/api/compile/pipeline">
+    Main compilation entry point. Orchestrates the full pipeline from SamplingGraph to CompiledProgram.
+  </Card>
+  <Card title="evaluate()" icon="calculator" href="/api/compile/evaluate">
+    Evaluates compiled circuits with parameter values using exact arithmetic on JAX arrays.
+  </Card>
+</CardGroup>
+
+## Decomposition Modes
+
+The compilation pipeline supports two modes:
+
+<ParamField path="mode" type="'sequential' | 'joint'">
+  **Sequential mode** ("sequential"):
+  - Creates circuits for sampling one output at a time: [0, 1, 2, ..., n]
+  - Used for full circuit sampling
+  - Each output is conditioned on previous measurements
+  
+  **Joint mode** ("joint"):
+  - Creates only two circuits: [0, n] (normalization and all outputs)
+  - Used for probability estimation
+  - Computes joint probability of all outputs
+</ParamField>
+
+<Note>
+  The compilation pipeline is designed for developers working on tsim internals. End users typically interact with higher-level APIs in `tsim.sample`.
+</Note>
+
+## Internal Structure
+
+The compile module consists of:
+
+- `pipeline.py` - Main compilation orchestration ([docs](/api/compile/pipeline))
+- `evaluate.py` - Efficient evaluation of compiled circuits ([docs](/api/compile/evaluate))
+- `compile.py` - Low-level conversion to JAX arrays
+- `stabrank.py` - Stabilizer rank decomposition algorithm
+
+<Info>
+  All compilation outputs are immutable JAX/Equinox structures, enabling efficient caching and JIT compilation.
+</Info>

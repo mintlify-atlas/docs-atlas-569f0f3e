@@ -1,0 +1,91 @@
+---
+title: Introduction
+description: Learn about tsim, a GPU-accelerated quantum circuit sampler for Clifford+T circuits with Pauli noise
+---
+
+# Introduction to tsim
+
+tsim is a quantum circuit simulator that enables fast sampling from Clifford+T circuits with Pauli noise. It feels just like [Stim](https://github.com/quantumlib/Stim), but with support for non-Clifford gates like T, T_DAG, and arbitrary rotation gates.
+
+## What is tsim?
+
+tsim is a quantum circuit sampler designed for efficient sampling of circuits that combine Clifford gates with non-Clifford operations like T gates. Its underlying algorithm uses stabilizer rank decomposition together with ZX-calculus simplification rules, based on [Sutcliffe and Kissinger (2025)](https://arxiv.org/abs/2403.06777).
+
+Just like Stim, tsim compiles circuits into measurement or detector samplers. These samplers manage a contiguous data structure that allows for efficient sampling on CPU or GPU.
+
+## Why tsim?
+
+tsim bridges the gap between purely Clifford simulators (like Stim) and general-purpose quantum simulators, offering:
+
+<CardGroup cols={2}>
+  <Card title="Stim Compatibility" icon="code-compare">
+    Drop-in replacement for Stim with full API compatibility. For many existing scripts, replacing `stim` with `tsim` should just work.
+  </Card>
+  
+  <Card title="Non-Clifford Support" icon="atom">
+    Supports T gates, T_DAG, and rotation gates (R_X, R_Y, R_Z, U3) in addition to all Stim gates and noise channels.
+  </Card>
+  
+  <Card title="GPU Acceleration" icon="microchip">
+    Efficient sampling on CPU or GPU with JAX-powered acceleration, enabling fast simulation of hundreds of qubits.
+  </Card>
+  
+  <Card title="True Detector Samples" icon="chart-line">
+    Simulates actual detector samples rather than just detection flips, supporting non-deterministic detectors and observables.
+  </Card>
+</CardGroup>
+
+## Key Differences from Stim
+
+While tsim maintains API compatibility with Stim, there are important differences:
+
+<Note>
+**Detector Sampling Behavior**: tsim simulates actual detector samples, whereas Stim only reports detection flips (detection samples XORed with a noiseless reference sample).
+
+For example, a circuit with `X 0; M 0; DETECTOR rec[-1]` will report `True` values in tsim but `False` values in Stim.
+</Note>
+
+<Info>
+**Performance Trade-offs**: tsim can simulate hundreds of qubits, as long as the circuit does not have too many non-Clifford instructions. The stabilizer rank grows with the number of T gates, so circuits with many T gates may become computationally expensive.
+</Info>
+
+## Supported Operations
+
+tsim supports all [Stim instructions](https://github.com/quantumlib/Stim/wiki/Stim-v1.9-Gate-Reference), including:
+
+- All Clifford gates (H, S, CNOT, CZ, SQRT_X, etc.)
+- All Pauli gates (X, Y, Z)
+- All Stim noise channels (DEPOLARIZE1, DEPOLARIZE2, PAULI_CHANNEL_1, X_ERROR, etc.)
+- Measurement operations (M, MR, MX, MY, MZ)
+- Detector and observable annotations
+
+**Additionally**, tsim supports these non-Clifford instructions:
+
+- **T and T_DAG**: π/4 phase rotation gates
+- **R_X, R_Y, R_Z**: Rotation gates around the X, Y, and Z axes
+- **U3**: General single-qubit unitary with three parameters
+
+## How It Works
+
+tsim uses stabilizer rank decomposition based on the ZX calculus and is built on top of [pyzx](https://github.com/Quantomatic/pyzx). The workflow is:
+
+1. Circuits are converted into ZX diagrams
+2. Noise channels are injected as parametrized Pauli vertices
+3. ZX-calculus simplification rules reduce the diagram complexity
+4. The diagram is compiled into contiguous JAX arrays for efficient sampling
+
+This approach enables fast sampling on both CPU and GPU, following the methodology described in the [Sutcliffe and Kissinger paper](https://arxiv.org/abs/2403.06777).
+
+## Get Started
+
+Ready to start using tsim? Check out these resources:
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Install tsim with pip or uv, including GPU support options
+  </Card>
+  
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Create your first circuit and start sampling in minutes
+  </Card>
+</CardGroup>

@@ -1,0 +1,368 @@
+---
+title: Sampling
+description: Efficiently sample measurement outcomes and detector events from quantum circuits
+---
+
+Tsim provides high-performance samplers for extracting measurement outcomes and detector events from quantum circuits. Samplers are compiled once and can generate many samples efficiently, making them ideal for Monte Carlo simulations and error correction studies.
+
+## Overview
+
+Tsim offers two types of samplers:
+
+1. **Measurement Sampler** - Samples raw measurement outcomes
+2. **Detector Sampler** - Samples detector and observable outcomes (for error correction)
+
+Both samplers use JAX for GPU acceleration and support batch processing for optimal performance.
+
+## Measurement Sampling
+
+### Compiling a Measurement Sampler
+
+Create a sampler from any circuit containing measurements:
+
+```python
+import tsim
+import numpy as np
+
+circuit = tsim.Circuit('''
+    H 0
+    CNOT 0 1
+    M 0 1
+''')
+
+sampler = circuit.compile_sampler(seed=0)
+```
+
+<Info>
+The `seed` parameter is optional. If not provided, a random seed will be generated. Setting a seed ensures reproducible results.
+</Info>
+
+### Drawing Samples
+
+Generate measurement samples using the `sample()` method:
+
+```python
+# Sample 1000 shots
+samples = sampler.sample(shots=1000)
+
+# samples.shape = (1000, 2)
+# Each row is one shot, each column is one measurement
+```
+
+### Batch Size Control
+
+Control memory usage and GPU utilization with the `batch_size` parameter:
+
+<CodeGroup>
+```python CPU (Default)
+# Default batch size (1024)
+samples = sampler.sample(shots=10000)
+```
+
+```python GPU (Large Batch)
+# Increase batch size for better GPU utilization
+samples = sampler.sample(shots=100000, batch_size=8192)
+```
+
+```python Memory Constrained
+# Smaller batches for limited memory
+samples = sampler.sample(shots=10000, batch_size=512)
+```
+</CodeGroup>
+
+<Tip>
+When using GPU acceleration, increase `batch_size` until VRAM is fully utilized for maximum throughput. Monitor GPU memory usage to find the optimal value.
+</Tip>
+
+## Detector Sampling
+
+### Understanding Detectors vs Measurements
+
+In Stim and tsim, **detectors** are parity checks used in quantum error correction:
+
+```python
+circuit = tsim.Circuit('''
+    # Prepare |+⟩ state
+    R 0
+    H 0
+    
+    # Add noise
+    X_ERROR(0.1) 0
+    
+    # Measure and check parity
+    M 0
+    DETECTOR rec[-1]  # Check if measurement is 0
+''')
+```
+
+<Warning>
+**Important difference from Stim**: Tsim samples actual detector values (True/False), while Stim samples detection **events** (flips from a noiseless reference). A circuit producing True detectors in tsim will produce False detectors in Stim.
+</Warning>
+
+### Compiling a Detector Sampler
+
+```python
+circuit = tsim.Circuit('''
+    R 0 1 2
+    X 2
+    M 0 1 2
+    DETECTOR rec[-2]
+    DETECTOR rec[-3]
+    OBSERVABLE_INCLUDE(0) rec[-1]
+''')
+
+sampler = circuit.compile_detector_sampler(seed=42)
+```
+
+### Sampling Detectors
+
+The basic `sample()` method returns only detector outcomes:
+
+```python
+# Sample detectors only
+detector_samples = sampler.sample(shots=100)
+
+# detector_samples.shape = (100, 2)
+# Two detectors, one per column
+```
+
+### Including Observables
+
+Control whether and where observable outcomes appear:
+
+<Tabs>
+<Tab title="Detectors Only">
+```python
+# Default: detectors only
+samples = sampler.sample(shots=100)
+# Shape: (100, num_detectors)
+```
+</Tab>
+
+<Tab title="Append Observables">
+```python
+# Observables after detectors
+samples = sampler.sample(
+    shots=100,
+    append_observables=True
+)
+# Shape: (100, num_detectors + num_observables)
+```
+</Tab>
+
+<Tab title="Prepend Observables">
+```python
+# Observables before detectors
+samples = sampler.sample(
+    shots=100,
+    prepend_observables=True
+)
+# Shape: (100, num_observables + num_detectors)
+```
+</Tab>
+
+<Tab title="Separate Arrays">
+```python
+# Return two separate arrays
+detectors, observables = sampler.sample(
+    shots=100,
+    separate_observables=True
+)
+# detectors.shape = (100, num_detectors)
+# observables.shape = (100, num_observables)
+```
+</Tab>
+</Tabs>
+
+### Bit Packing
+
+For large-scale simulations, bit-pack results to save memory:
+
+```python
+# Get bit-packed results
+packed_samples = sampler.sample(
+    shots=10000,
+    bit_packed=True
+)
+
+# Each byte stores 8 detector values
+# packed_samples.dtype = np.uint8
+```
+
+<Note>
+Bit packing reduces memory usage by 8x but makes individual bit access slightly more expensive. Use for large sample sets where memory is constrained.
+</Note>
+
+## Advanced Usage
+
+### Setting Random Seeds
+
+Control randomness for reproducibility:
+
+```python
+# Set seed during compilation
+sampler = circuit.compile_sampler(seed=42)
+
+# Same seed → same samples
+samples1 = sampler.sample(shots=100)
+samples2 = sampler.sample(shots=100)
+# samples1 ≠ samples2 (sampler state advances)
+
+# Recreate sampler for identical results
+sampler = circuit.compile_sampler(seed=42)
+samples3 = sampler.sample(shots=100)
+# samples3 == samples1 ✓
+```
+
+### Monitoring Compilation
+
+Samplers display compilation statistics:
+
+```python
+circuit = tsim.Circuit('''
+    X_ERROR(0.1) 0 1
+    M 0 1
+''')
+
+sampler = circuit.compile_sampler()
+print(repr(sampler))
+# Output:
+# CompiledMeasurementSampler(2 graphs, 2 error channel bits, 
+# 2 outputs for largest cc, ≤ 3 parameters, 10 A terms, 
+# 8 B terms, 4 C terms, 2 D terms, 1.2 kB)
+```
+
+This shows:
+- **graphs**: Number of probability amplitude graphs
+- **error channel bits**: Noise parameters being sampled
+- **outputs**: Maximum outputs in any connected component
+- **parameters**: Maximum input parameters to any graph
+- **A/B/C/D terms**: Internal representation sizes
+- **Memory**: Total compiled size
+
+### Error Correction Example
+
+Complete workflow for quantum error correction with PyMatching:
+
+```python
+import pymatching
+import stim
+
+# Generate a surface code circuit
+stim_circuit = stim.Circuit.generated(
+    "surface_code:rotated_memory_z",
+    distance=3,
+    rounds=3,
+    after_clifford_depolarization=0.01
+)
+
+# Compile tsim sampler
+circuit = tsim.Circuit.from_stim_program(stim_circuit)
+sampler = circuit.compile_detector_sampler(seed=0)
+
+# Sample detectors and observables
+detections, observables = sampler.sample(
+    shots=10000,
+    batch_size=5000,
+    separate_observables=True
+)
+
+# Build decoder from Stim's error model
+dem = stim_circuit.detector_error_model(decompose_errors=True)
+matcher = pymatching.Matching.from_detector_error_model(dem)
+
+# Decode
+predictions = matcher.decode_batch(detections)
+
+# Calculate logical error rate
+errors_before = np.count_nonzero(observables)
+errors_after = np.count_nonzero(np.logical_xor(observables, predictions))
+logical_error_rate = errors_after / len(observables)
+
+print(f"Errors before decoding: {errors_before}")
+print(f"Errors after decoding: {errors_after}")
+print(f"Logical error rate: {logical_error_rate:.4f}")
+```
+
+## Comparison with Stim
+
+Key differences between tsim and Stim samplers:
+
+| Feature | Tsim | Stim |
+|---------|------|------|
+| **Non-Clifford support** | ✅ T, rotations, U3 | ❌ Clifford only |
+| **Detector values** | Absolute values | Detection events (XOR with reference) |
+| **GPU acceleration** | ✅ Via JAX | ❌ CPU only |
+| **Gauge detectors** | ✅ Supported | ❌ Raises error |
+| **Batch processing** | Manual batch_size | Automatic |
+
+### Handling Gauge Detectors
+
+Tsim supports non-deterministic ("gauge") detectors:
+
+```python
+# This circuit has a gauge detector (non-deterministic under noiseless execution)
+circuit = tsim.Circuit('''
+    H 0
+    M 0
+    DETECTOR rec[-1]
+''')
+
+# Works in tsim
+sampler = circuit.compile_detector_sampler()
+samples = sampler.sample(100)
+print(f"Detector fires ~50% of the time: {np.mean(samples):.2f}")
+
+# Would raise an error in Stim without allow_gauge_detectors=True
+```
+
+## Performance Tips
+
+<Steps>
+
+### Compile once, sample many times
+
+```python
+# ✅ Good
+sampler = circuit.compile_sampler(seed=0)
+for _ in range(10):
+    samples = sampler.sample(1000)
+
+# ❌ Bad - recompiles every time
+for _ in range(10):
+    sampler = circuit.compile_sampler(seed=0)
+    samples = sampler.sample(1000)
+```
+
+### Tune batch size for your hardware
+
+```python
+# Profile to find optimal batch size
+import time
+
+for batch_size in [512, 1024, 2048, 4096, 8192]:
+    start = time.time()
+    samples = sampler.sample(100000, batch_size=batch_size)
+    elapsed = time.time() - start
+    print(f"batch_size={batch_size}: {elapsed:.2f}s")
+```
+
+### Use bit packing for memory efficiency
+
+```python
+# For 10M shots with 1000 detectors:
+# Unpacked: 10M × 1000 × 1 byte = 10 GB
+# Packed: 10M × 1000 ÷ 8 bytes = 1.25 GB
+samples = sampler.sample(
+    shots=10_000_000,
+    bit_packed=True
+)
+```
+
+</Steps>
+
+## Next Steps
+
+- Learn about [GPU acceleration](/guides/gpu-acceleration) for maximum performance
+- Explore [noise channels](/guides/noise-channels) for realistic error models
+- See [non-Clifford gates](/guides/non-clifford-gates) for advanced quantum circuits

@@ -1,0 +1,679 @@
+---
+title: 'Circuit'
+description: 'Quantum circuit with non-Clifford gate support'
+---
+
+## Overview
+
+The `Circuit` class is a thin wrapper around `stim.Circuit` that extends support for non-Clifford gates like T gates and arbitrary rotations. It provides a familiar interface for building and manipulating quantum circuits.
+
+## Constructor
+
+### `__init__`
+
+```python
+def __init__(self, stim_program_text: str = "") -> None
+```
+
+Initialize a circuit from STIM program text.
+
+<ParamField path="stim_program_text" type="str" default="">
+  STIM program text to parse. If empty, creates an empty circuit. Supports shorthand syntax for non-Clifford gates.
+</ParamField>
+
+**Example:**
+
+```python
+from tsim import Circuit
+
+# Create a simple circuit
+circuit = Circuit('''
+    H 0
+    T 0
+    CNOT 0 1
+    M 0 1
+''')
+
+# Create an empty circuit
+empty_circuit = Circuit()
+```
+
+## Building Circuits
+
+### `append`
+
+```python
+def append(
+    self,
+    name: str,
+    targets: Union[int, stim.GateTarget, stim.PauliString, Iterable[...]] = (),
+    arg: Union[float, Iterable[float], None] = None,
+    *,
+    tag: str = ""
+) -> None
+```
+
+Append an operation to the circuit.
+
+<ParamField path="name" type="str" required>
+  The gate name (e.g., "H", "CNOT", "T", "R_Z"). Can also be a `stim.CircuitInstruction` or `stim.CircuitRepeatBlock`.
+</ParamField>
+
+<ParamField path="targets" type="Union[int, Iterable]" default="()">
+  The qubit(s) operated on by the gate. Can be a single int or an iterable of targets.
+</ParamField>
+
+<ParamField path="arg" type="Union[float, Iterable[float], None]" default="None">
+  Gate parameters such as error probabilities or rotation angles.
+</ParamField>
+
+<ParamField path="tag" type="str" default="">
+  A customizable string attached to the instruction.
+</ParamField>
+
+**Examples:**
+
+<CodeGroup>
+
+```python Basic Gates
+circuit = Circuit()
+circuit.append("H", 0)
+circuit.append("CNOT", [0, 1])
+circuit.append("M", [0, 1])
+```
+
+```python Non-Clifford Gates
+circuit = Circuit()
+# T gate (shorthand)
+circuit.append("T", 0)
+circuit.append("T_DAG", 1)
+
+# Rotation gates
+circuit.append("R_Z", 0, arg=0.25)  # R_Z(π/4)
+circuit.append("R_X", 1, arg=0.5)   # R_X(π/2)
+
+# U3 gate
+circuit.append("U3", 0, arg=(0.3, 0.24, 0.49))
+```
+
+```python Noise
+circuit = Circuit()
+circuit.append("H", 0)
+circuit.append("DEPOLARIZE1", 0, arg=0.01)
+circuit.append("M", 0)
+```
+
+</CodeGroup>
+
+### `append_from_stim_program_text`
+
+```python
+def append_from_stim_program_text(self, stim_program_text: str) -> None
+```
+
+Append operations described by STIM format program into the circuit.
+
+<ParamField path="stim_program_text" type="str" required>
+  STIM program text with operations to append. Supports shorthand syntax.
+</ParamField>
+
+**Example:**
+
+```python
+circuit = Circuit("H 0")
+circuit.append_from_stim_program_text("""
+    CNOT 0 1
+    T 0
+    M 0 1
+""")
+```
+
+## Compilation
+
+### `compile_sampler`
+
+```python
+def compile_sampler(self, *, seed: int | None = None) -> CompiledMeasurementSampler
+```
+
+Compile the circuit into a measurement sampler.
+
+<ParamField path="seed" type="int | None" default="None">
+  Random seed for the sampler. If None, a random seed will be generated.
+</ParamField>
+
+**Returns:** A `CompiledMeasurementSampler` that can sample measurement outcomes.
+
+**Example:**
+
+```python
+circuit = Circuit('''
+    H 0
+    CNOT 0 1
+    M 0 1
+''')
+
+sampler = circuit.compile_sampler(seed=42)
+samples = sampler.sample(shots=1000)
+print(samples.shape)  # (1000, 2)
+```
+
+### `compile_detector_sampler`
+
+```python
+def compile_detector_sampler(self, *, seed: int | None = None) -> CompiledDetectorSampler
+```
+
+Compile the circuit into a detector sampler.
+
+<ParamField path="seed" type="int | None" default="None">
+  Random seed for the sampler. If None, a random seed will be generated.
+</ParamField>
+
+**Returns:** A `CompiledDetectorSampler` that can sample detectors and observables.
+
+**Example:**
+
+```python
+circuit = Circuit('''
+    R 0 1
+    H 0
+    CNOT 0 1
+    M 0 1
+    DETECTOR rec[-1]
+    OBSERVABLE_INCLUDE(0) rec[-2]
+''')
+
+sampler = circuit.compile_detector_sampler(seed=42)
+detectors, observables = sampler.sample(
+    shots=1000,
+    separate_observables=True
+)
+```
+
+### `detector_error_model`
+
+```python
+def detector_error_model(
+    self,
+    *,
+    decompose_errors: bool = False,
+    flatten_loops: bool = False,
+    allow_gauge_detectors: bool = False,
+    approximate_disjoint_errors: bool = False,
+    ignore_decomposition_failures: bool = False,
+    block_decomposition_from_introducing_remnant_edges: bool = False
+) -> stim.DetectorErrorModel
+```
+
+Return a detector error model describing the error processes in the circuit.
+
+<ParamField path="decompose_errors" type="bool" default="False">
+  When True, attempts to decompose composite errors into simpler errors. Not supported by tsim.
+</ParamField>
+
+<ParamField path="flatten_loops" type="bool" default="False">
+  When True, the output will not contain any repeat blocks.
+</ParamField>
+
+<ParamField path="allow_gauge_detectors" type="bool" default="False">
+  When False, verifies that detectors are deterministic under noiseless execution.
+</ParamField>
+
+<ParamField path="approximate_disjoint_errors" type="bool | float" default="False">
+  When True or a threshold probability, approximate disjoint error components as independent.
+</ParamField>
+
+<ParamField path="ignore_decomposition_failures" type="bool" default="False">
+  When True, undecomposed errors are inserted into the output instead of aborting.
+</ParamField>
+
+<ParamField path="block_decomposition_from_introducing_remnant_edges" type="bool" default="False">
+  Requires both components of a decomposition to appear elsewhere in the model.
+</ParamField>
+
+**Returns:** A `stim.DetectorErrorModel` describing error mechanisms.
+
+**Example:**
+
+```python
+circuit = Circuit('''
+    H 0
+    DEPOLARIZE1(0.01) 0
+    M 0
+    DETECTOR rec[-1]
+''')
+
+dem = circuit.detector_error_model(allow_gauge_detectors=True)
+print(dem)
+```
+
+## Properties
+
+### `num_qubits`
+
+```python
+@property
+def num_qubits(self) -> int
+```
+
+The number of qubits used by the circuit (one more than the largest qubit index).
+
+**Example:**
+
+```python
+circuit = Circuit("H 0\nCNOT 0 5")
+print(circuit.num_qubits)  # 6
+```
+
+### `num_measurements`
+
+```python
+@property
+def num_measurements(self) -> int
+```
+
+The number of measurement bits produced when sampling the circuit.
+
+**Example:**
+
+```python
+circuit = Circuit("M 0 1 2")
+print(circuit.num_measurements)  # 3
+```
+
+### `num_detectors`
+
+```python
+@property
+def num_detectors(self) -> int
+```
+
+The number of detector bits produced when sampling the circuit.
+
+**Example:**
+
+```python
+circuit = Circuit('''
+    M 0 1
+    DETECTOR rec[-1]
+    DETECTOR rec[-2]
+''')
+print(circuit.num_detectors)  # 2
+```
+
+### `num_observables`
+
+```python
+@property
+def num_observables(self) -> int
+```
+
+The number of logical observables (one more than the largest observable index).
+
+**Example:**
+
+```python
+circuit = Circuit('''
+    M 0 1
+    OBSERVABLE_INCLUDE(0) rec[-1]
+    OBSERVABLE_INCLUDE(2) rec[-2]
+''')
+print(circuit.num_observables)  # 3
+```
+
+### `num_ticks`
+
+```python
+@property
+def num_ticks(self) -> int
+```
+
+The number of TICK instructions in the circuit.
+
+**Example:**
+
+```python
+circuit = Circuit('''
+    H 0
+    TICK
+    CNOT 0 1
+    TICK
+    M 0
+''')
+print(circuit.num_ticks)  # 2
+```
+
+### `stim_circuit`
+
+```python
+@property
+def stim_circuit(self) -> stim.Circuit
+```
+
+Return a copy of the underlying STIM circuit.
+
+**Example:**
+
+```python
+circuit = Circuit("H 0\nCNOT 0 1")
+stim_circ = circuit.stim_circuit
+```
+
+## Utility Methods
+
+### `copy`
+
+```python
+def copy(self) -> Circuit
+```
+
+Create a deep copy of the circuit.
+
+**Example:**
+
+```python
+circuit = Circuit("H 0")
+copy = circuit.copy()
+```
+
+### `flattened`
+
+```python
+def flattened(self) -> Circuit
+```
+
+Return a copy with all repeat blocks expanded.
+
+**Example:**
+
+```python
+circuit = Circuit("H 0") * 3
+flat = circuit.flattened()
+print(len(circuit))  # 1 (repeat block)
+print(len(flat))      # 3 (expanded)
+```
+
+### `without_noise`
+
+```python
+def without_noise(self) -> Circuit
+```
+
+Return a copy with all noise instructions removed.
+
+**Example:**
+
+```python
+circuit = Circuit('''
+    H 0
+    DEPOLARIZE1(0.01) 0
+    M 0
+''')
+clean = circuit.without_noise()
+```
+
+### `without_annotations`
+
+```python
+def without_annotations(self) -> Circuit
+```
+
+Return a copy with all DETECTOR and OBSERVABLE_INCLUDE instructions removed.
+
+**Example:**
+
+```python
+circuit = Circuit('''
+    H 0
+    M 0
+    DETECTOR rec[-1]
+''')
+clean = circuit.without_annotations()
+```
+
+### `inverse`
+
+```python
+def inverse(self) -> Circuit
+```
+
+Return the inverse of the circuit.
+
+**Example:**
+
+```python
+circuit = Circuit("H 0\nT 0\nR_Z(0.25) 0")
+inv = circuit.inverse()
+identity = circuit + inv
+```
+
+### `tcount`
+
+```python
+def tcount(self) -> int
+```
+
+Count the number of T gates in the circuit.
+
+**Example:**
+
+```python
+circuit = Circuit("H 0\nT 0\nT 1")
+print(circuit.tcount())  # 2
+```
+
+### `diagram`
+
+```python
+def diagram(
+    self,
+    type: Literal["pyzx", "pyzx-dets", "pyzx-meas", "timeline-svg", "timeslice-svg"] = "timeline-svg",
+    tick: int | range | None = None,
+    filter_coords: Iterable[Iterable[float] | stim.DemTarget] = ((),),
+    rows: int | None = None,
+    height: float | None = None,
+    width: float | None = None,
+    **kwargs: Any
+) -> Any
+```
+
+Return a diagram of the circuit.
+
+<ParamField path="type" type="str" default="timeline-svg">
+  Type of diagram: "pyzx", "pyzx-dets", "pyzx-meas", "timeline-svg", or "timeslice-svg".
+</ParamField>
+
+<ParamField path="tick" type="int | range | None" default="None">
+  For timeslice diagrams, specifies which TICK instruction(s) to display.
+</ParamField>
+
+<ParamField path="rows" type="int | None" default="None">
+  Number of rows for multi-piece diagrams.
+</ParamField>
+
+<ParamField path="height" type="float | None" default="None">
+  Optional height for the rendered diagram.
+</ParamField>
+
+<ParamField path="width" type="float | None" default="None">
+  Optional width for the rendered diagram.
+</ParamField>
+
+**Example:**
+
+```python
+circuit = Circuit('''
+    H 0
+    CNOT 0 1
+    M 0 1
+''')
+
+# Timeline diagram
+svg = circuit.diagram(type="timeline-svg")
+
+# ZX diagram
+zx_graph = circuit.diagram(type="pyzx")
+```
+
+## Class Methods
+
+### `from_stim_program`
+
+```python
+@classmethod
+def from_stim_program(cls, stim_circuit: stim.Circuit) -> Circuit
+```
+
+Create a Circuit from a `stim.Circuit` object.
+
+<ParamField path="stim_circuit" type="stim.Circuit" required>
+  The STIM circuit to wrap.
+</ParamField>
+
+**Example:**
+
+```python
+import stim
+stim_circ = stim.Circuit("H 0\nCNOT 0 1")
+circuit = Circuit.from_stim_program(stim_circ)
+```
+
+### `from_file`
+
+```python
+@classmethod
+def from_file(cls, filename: str) -> Circuit
+```
+
+Create a Circuit from a file.
+
+<ParamField path="filename" type="str" required>
+  Path to the file containing STIM program text.
+</ParamField>
+
+**Example:**
+
+```python
+circuit = Circuit.from_file("my_circuit.stim")
+```
+
+## Operators
+
+The `Circuit` class supports various operators for combining and manipulating circuits:
+
+<CodeGroup>
+
+```python Addition
+# Combine circuits
+c1 = Circuit("H 0")
+c2 = Circuit("CNOT 0 1")
+c3 = c1 + c2
+
+# In-place addition
+c1 += c2
+```
+
+```python Multiplication
+# Repeat circuit
+c = Circuit("H 0")
+repeated = c * 3  # Creates repeat block
+
+# In-place multiplication
+c *= 3
+```
+
+```python Indexing
+circuit = Circuit("H 0\nX 1\nCNOT 0 1")
+
+# Get single instruction
+instr = circuit[0]  # First instruction
+
+# Slice circuit
+sliced = circuit[1:3]  # Instructions 1-2
+```
+
+```python Equality
+c1 = Circuit("H 0")
+c2 = Circuit("H 0")
+print(c1 == c2)  # True
+
+# Approximate equality
+c1 = Circuit("DEPOLARIZE1(0.01) 0")
+c2 = Circuit("DEPOLARIZE1(0.011) 0")
+print(c1.approx_equals(c2, atol=0.01))  # True
+```
+
+</CodeGroup>
+
+## Advanced Features
+
+### ZX Calculus
+
+```python
+def get_graph(self) -> BaseGraph
+```
+
+Get the ZX-calculus graph representation of the circuit.
+
+**Example:**
+
+```python
+circuit = Circuit("H 0\nCNOT 0 1")
+graph = circuit.get_graph()
+```
+
+### `get_sampling_graph`
+
+```python
+def get_sampling_graph(self, sample_detectors: bool = False) -> BaseGraph
+```
+
+Get a ZX graph optimized for computing measurement or detector probabilities.
+
+<ParamField path="sample_detectors" type="bool" default="False">
+  If True, sample detectors and observables instead of measurements.
+</ParamField>
+
+**Example:**
+
+```python
+circuit = Circuit("H 0\nM 0")
+graph = circuit.get_sampling_graph(sample_detectors=False)
+```
+
+### `to_matrix`
+
+```python
+def to_matrix(self) -> np.ndarray
+```
+
+Convert the circuit to its unitary matrix representation.
+
+**Example:**
+
+```python
+circuit = Circuit("H 0")
+matrix = circuit.to_matrix()
+print(matrix.shape)  # (2, 2)
+```
+
+### `to_tensor`
+
+```python
+def to_tensor(self) -> np.ndarray
+```
+
+Convert the circuit to tensor representation.
+
+**Example:**
+
+```python
+circuit = Circuit("H 0")
+tensor = circuit.to_tensor()
+```
+
+## See Also
+
+- [CompiledMeasurementSampler](/api/sampler#compiledmeasurementsampler) - Sample measurement outcomes
+- [CompiledDetectorSampler](/api/sampler#compileddetectorsampler) - Sample detectors and observables

@@ -1,0 +1,105 @@
+---
+title: "linalg"
+description: "Linear algebra utilities for GF(2) operations"
+---
+
+The `linalg` module provides utilities for performing linear algebra operations over the Galois field GF(2), which is essential for quantum error correction codes and stabilizer formalism.
+
+## Functions
+
+### find_basis()
+
+Decompose a set of binary vectors into a basis subset and a transformation matrix over GF(2).
+
+```python
+def find_basis(vectors: np.ndarray) -> tuple[np.ndarray, np.ndarray]
+```
+
+Given a set of vectors **V**, this function finds a maximal linearly independent subset **B** (the basis) and computes a transformation matrix **T** such that the original vectors can be reconstructed from the basis via matrix multiplication over GF(2):
+
+**V = T @ B (mod 2)**
+
+<ParamField path="vectors" type="np.ndarray" required>
+  Input binary vectors of shape `(N, D)` where `N` is the number of vectors and `D` is the dimension. Can be a list of lists or a numpy array. Elements should be 0 or 1 (or convertible to them).
+</ParamField>
+
+<ResponseField name="basis" type="np.ndarray">
+  The subset of linearly independent vectors with shape `(K, D)`, where `K` is the rank of the vector space (K ≤ N). These vectors form a basis for the span of the input vectors.
+</ResponseField>
+
+<ResponseField name="transform" type="np.ndarray">
+  The transformation matrix with shape `(N, K)` that reconstructs the original vectors from the basis. Satisfies `vectors = (transform @ basis) % 2`.
+</ResponseField>
+
+#### Example
+
+```python
+import numpy as np
+from tsim.utils.linalg import find_basis
+
+# Define binary vectors (rows are vectors)
+vectors = np.array([
+    [1, 0, 1, 0],
+    [0, 1, 0, 1],
+    [1, 1, 1, 1],  # This is the sum of the first two (mod 2)
+    [1, 0, 1, 0],  # Duplicate of the first
+], dtype=np.uint8)
+
+# Find basis and transformation matrix
+basis, transform = find_basis(vectors)
+
+print("Basis vectors:")
+print(basis)
+# Output:
+# [[1 0 1 0]
+#  [0 1 0 1]]
+
+print("Transformation matrix:")
+print(transform)
+# Output:
+# [[1 0]
+#  [0 1]
+#  [1 1]
+#  [1 0]]
+
+# Verify reconstruction
+reconstructed = (transform @ basis) % 2
+print("Reconstructed equals original:", np.array_equal(reconstructed, vectors))
+# Output: True
+```
+
+#### Algorithm Details
+
+The function uses a modified Gaussian elimination algorithm over GF(2):
+
+1. **Iterates through vectors** in order, attempting to add each to the basis
+2. **Reduces each vector** against the current basis using XOR operations
+3. **Checks for independence** by verifying if the reduced vector is non-zero
+4. **Tracks coefficients** to build the transformation matrix that expresses each original vector in terms of the basis
+
+<Note>
+  The basis vectors are selected in the order they appear in the input. This means the algorithm returns the first K linearly independent vectors, where K is the rank. The order of input vectors matters for the resulting basis.
+</Note>
+
+#### Use Cases
+
+The `find_basis()` function is particularly useful for:
+
+- **Stabilizer group analysis**: Finding independent generators for a stabilizer group
+- **Error correction**: Identifying a minimal set of parity checks for quantum codes
+- **Symplectic operations**: Working with Pauli operators in the stabilizer formalism
+- **Syndrome decoding**: Reducing syndrome equations to independent constraints
+- **Code distance calculation**: Finding logical operators in quantum error correcting codes
+
+#### Performance
+
+The algorithm has time complexity O(N × D × K) where:
+- N is the number of input vectors
+- D is the dimension of each vector
+- K is the rank (size of the resulting basis)
+
+For typical quantum error correction applications with moderate code sizes (N, D, K < 1000), this implementation is efficient.
+
+<Note>
+  All operations are performed over GF(2), meaning addition is XOR (⊕) and multiplication is AND (∧). The numpy `^` operator is used for XOR operations on binary arrays.
+</Note>

@@ -1,0 +1,256 @@
+---
+title: 'Noise Channels'
+description: 'Pauli noise channels and error sampling infrastructure for quantum error modeling'
+---
+
+## Overview
+
+The `tsim.noise.channels` module provides infrastructure for modeling and sampling from Pauli noise channels in quantum circuits. It implements efficient error channel composition, basis transformations, and geometric-skip sampling optimized for low-noise regimes.
+
+## ChannelSampler
+
+<ParamField path="ChannelSampler" type="class">
+  Samples from multiple error channels and transforms to a reduced basis using geometric-skip sampling.
+
+  This class combines multiple error channels (each producing error bits e0, e1, ...) and applies a linear transformation over GF(2) to convert samples from the original "e" basis to a reduced "f" basis:
+
+  ```
+  f_i = error_transform_ij * e_j mod 2
+  ```
+
+  Channels are automatically simplified by:
+  1. Removing bits that do not affect any f-variable (all-zero columns in error_transform)
+  2. Merging channels with identical column signatures
+  3. Absorbing channels whose signatures are subsets of others
+</ParamField>
+
+### Constructor
+
+```python
+ChannelSampler(
+    channel_probs: list[np.ndarray],
+    error_transform: np.ndarray,
+    seed: int | None = None
+)
+```
+
+<ParamField path="channel_probs" type="list[np.ndarray]" required>
+  List of probability arrays. Channel i has shape (2^k_i,) and produces k_i error bits starting at index sum(k_0:k_{i-1}).
+  
+  For example, if channels have shapes [(4,), (2,), (4,)], they produce variables [e0,e1], [e2], [e3,e4].
+</ParamField>
+
+<ParamField path="error_transform" type="np.ndarray" required>
+  Binary matrix of shape (num_f, num_e) where entry [i, j] = 1 means f_i depends on e_j.
+  
+  For example, if row 0 is [0, 1, 0, 1], then f0 = e1 XOR e3.
+</ParamField>
+
+<ParamField path="seed" type="int | None" default="None">
+  Random seed for sampling. If None, a random seed is generated.
+</ParamField>
+
+### Methods
+
+#### sample
+
+```python
+def sample(num_samples: int = 1) -> np.ndarray
+```
+
+Sample from all error channels and transform to new error basis using geometric-skip sampling, optimized for low-noise regimes where P(non-identity) &lt;&lt; 1 per channel.
+
+<ParamField path="num_samples" type="int" default="1">
+  Number of samples to draw.
+</ParamField>
+
+<ResponseField name="return" type="np.ndarray">
+  NumPy array of shape (num_samples, num_f) with uint8 values indicating which f-variables are set for each sample.
+</ResponseField>
+
+### Example
+
+```python
+from tsim.noise.channels import ChannelSampler, error_probs
+import numpy as np
+
+# Create two 1-bit channels with different error rates
+probs = [error_probs(0.1), error_probs(0.2)]
+
+# Define transformation: f0 = e0 XOR e1
+transform = np.array([[1, 1]])
+
+# Create sampler and draw samples
+sampler = ChannelSampler(probs, transform)
+samples = sampler.sample(1000)  # shape (1000, 1)
+```
+
+## Channel Helper Functions
+
+### error_probs
+
+```python
+def error_probs(p: float) -> np.ndarray
+```
+
+Single-bit error channel probability distribution.
+
+<ParamField path="p" type="float" required>
+  Error probability.
+</ParamField>
+
+<ResponseField name="return" type="np.ndarray">
+  Shape (2,) array with probabilities [1-p, p] for [no error, error].
+</ResponseField>
+
+### pauli_channel_1_probs
+
+```python
+def pauli_channel_1_probs(px: float, py: float, pz: float) -> np.ndarray
+```
+
+Single-qubit Pauli channel probability distribution.
+
+<ParamField path="px" type="float" required>
+  Probability of X error.
+</ParamField>
+
+<ParamField path="py" type="float" required>
+  Probability of Y error.
+</ParamField>
+
+<ParamField path="pz" type="float" required>
+  Probability of Z error.
+</ParamField>
+
+<ResponseField name="return" type="np.ndarray">
+  Shape (4,) array with probabilities in order [I, Z, X, Y] mapped to bits [00, 01, 10, 11].
+</ResponseField>
+
+### pauli_channel_2_probs
+
+```python
+def pauli_channel_2_probs(
+    pix: float, piy: float, piz: float,
+    pxi: float, pxx: float, pxy: float, pxz: float,
+    pyi: float, pyx: float, pyy: float, pyz: float,
+    pzi: float, pzx: float, pzy: float, pzz: float
+) -> np.ndarray
+```
+
+Two-qubit Pauli channel probability distribution.
+
+<ParamField path="pix, piy, piz, pxi, pxx, pxy, pxz, pyi, pyx, pyy, pyz, pzi, pzx, pzy, pzz" type="float" required>
+  Probabilities for each two-qubit Pauli error (e.g., pxy is probability of X⊗Y).
+</ParamField>
+
+<ResponseField name="return" type="np.ndarray">
+  Shape (16,) array with probabilities for all 16 two-qubit Pauli operators.
+</ResponseField>
+
+### correlated_error_probs
+
+```python
+def correlated_error_probs(probabilities: list[float]) -> np.ndarray
+```
+
+Build probability distribution for correlated error chain from CORRELATED_ERROR instructions.
+
+<ParamField path="probabilities" type="list[float]" required>
+  List of conditional probabilities [p1, p2, ..., pk] from a chain of CORRELATED_ERROR(p1) ELSE_CORRELATED_ERROR(p2) ... ELSE_CORRELATED_ERROR(pk).
+</ParamField>
+
+<ResponseField name="return" type="np.ndarray">
+  Shape (2^k,) array where only outcomes with at most one bit set have non-zero probability (errors are mutually exclusive).
+</ResponseField>
+
+<Note>
+  Since correlated errors are mutually exclusive, the probability distribution has special structure:
+  - P(0) = (1-p1)(1-p2)...(1-pk) (no error)
+  - P(2^i) = (1-p1)...(1-p_i) * p_{i+1} (error i+1 occurred)
+</Note>
+
+## Channel Manipulation Functions
+
+### xor_convolve
+
+```python
+def xor_convolve(probs_a: np.ndarray, probs_b: np.ndarray) -> np.ndarray
+```
+
+XOR convolution of two probability distributions: P(A XOR B = o) = sum over (a XOR b = o) of P(A=a) * P(B=b).
+
+<ParamField path="probs_a" type="np.ndarray" required>
+  Shape (2^k,) probabilities for channel A.
+</ParamField>
+
+<ParamField path="probs_b" type="np.ndarray" required>
+  Shape (2^k,) probabilities for channel B (same size as A).
+</ParamField>
+
+<ResponseField name="return" type="np.ndarray">
+  Shape (2^k,) probabilities for the combined channel.
+</ResponseField>
+
+### simplify_channels
+
+```python
+def simplify_channels(
+    channels: list[Channel],
+    max_bits: int = 4,
+    null_col_id: int | None = None
+) -> list[Channel]
+```
+
+Simplify channels by removing null columns, merging identical channels, and absorbing subsets.
+
+<ParamField path="channels" type="list[Channel]" required>
+  List of channels to simplify.
+</ParamField>
+
+<ParamField path="max_bits" type="int" default="4">
+  Maximum number of bits allowed per channel.
+</ParamField>
+
+<ParamField path="null_col_id" type="int | None" default="None">
+  Column ID representing the all-zero column, or None if there is no all-zero column.
+</ParamField>
+
+<ResponseField name="return" type="list[Channel]">
+  Simplified list of channels.
+</ResponseField>
+
+## Channel Data Class
+
+### Channel
+
+```python
+@dataclass
+class Channel:
+    probs: np.ndarray
+    unique_col_ids: tuple[int, ...]
+```
+
+A probability distribution over error outcomes.
+
+<ParamField path="probs" type="np.ndarray" required>
+  Shape (2^k,) probability array, sums to 1, dtype float64.
+</ParamField>
+
+<ParamField path="unique_col_ids" type="tuple[int, ...]" required>
+  Tuple of column IDs, where each ID corresponds to a bit of the channel.
+</ParamField>
+
+<ResponseField name="num_bits" type="int">
+  Property: Number of bits in the channel (k where probs has shape 2^k).
+</ResponseField>
+
+## Performance Notes
+
+<Note>
+  The geometric-skip sampling algorithm is optimized for low-noise regimes (P(error) &lt;&lt; 1) and provides significant performance advantages over naive sampling when dealing with many channels.
+</Note>
+
+<Warning>
+  Channel probability arrays must be properly normalized (sum to 1.0). The XOR convolution assumes both input arrays have the same shape (2^k).
+</Warning>

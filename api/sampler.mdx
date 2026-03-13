@@ -1,0 +1,523 @@
+---
+title: 'Samplers'
+description: 'Compiled samplers for efficient measurement and detector sampling'
+---
+
+## Overview
+
+Samplers compile quantum circuits into efficient representations for repeated sampling. They use JAX for hardware acceleration and support batched sampling for high performance.
+
+## CompiledMeasurementSampler
+
+Samples measurement outcomes from a quantum circuit.
+
+### Constructor
+
+```python
+def __init__(self, circuit: Circuit, *, seed: int | None = None)
+```
+
+Create a measurement sampler by compiling the circuit.
+
+<ParamField path="circuit" type="Circuit" required>
+  The quantum circuit to compile for sampling.
+</ParamField>
+
+<ParamField path="seed" type="int | None" default="None">
+  Random seed for reproducible sampling. If None, a random seed is generated.
+</ParamField>
+
+**Example:**
+
+```python
+from tsim import Circuit
+
+circuit = Circuit('''
+    H 0
+    CNOT 0 1
+    M 0 1
+''')
+
+sampler = circuit.compile_sampler(seed=42)
+```
+
+### `sample`
+
+```python
+def sample(self, shots: int, *, batch_size: int = 1024) -> np.ndarray
+```
+
+Sample measurement outcomes from the circuit.
+
+<ParamField path="shots" type="int" required>
+  The number of times to sample every measurement in the circuit.
+</ParamField>
+
+<ParamField path="batch_size" type="int" default="1024">
+  The number of samples to process in each batch. When using a GPU, increase this value until VRAM is fully utilized for maximum performance.
+</ParamField>
+
+**Returns:** A numpy array of shape `(shots, num_measurements)` containing boolean measurement outcomes.
+
+**Examples:**
+
+<CodeGroup>
+
+```python Basic Usage
+from tsim import Circuit
+
+circuit = Circuit('''
+    H 0
+    CNOT 0 1
+    M 0 1
+''')
+
+sampler = circuit.compile_sampler(seed=42)
+samples = sampler.sample(shots=1000)
+
+print(samples.shape)  # (1000, 2)
+print(samples.dtype)  # bool
+```
+
+```python Bell State
+circuit = Circuit('''
+    H 0
+    CNOT 0 1
+    M 0 1
+''')
+
+sampler = circuit.compile_sampler(seed=0)
+samples = sampler.sample(shots=10000)
+
+# Verify Bell state: outcomes should be either 00 or 11
+correlated = (samples[:, 0] == samples[:, 1]).all()
+print(f"Measurements correlated: {correlated}")
+```
+
+```python With Noise
+circuit = Circuit('''
+    H 0
+    X_ERROR(0.1) 0
+    M 0
+''')
+
+sampler = circuit.compile_sampler(seed=42)
+samples = sampler.sample(shots=10000)
+
+# Should see ~10% bit flips
+error_rate = samples[:, 0].mean()
+print(f"Observed error rate: {error_rate:.3f}")
+```
+
+```python Batch Size Tuning
+circuit = Circuit('''
+    H 0 1 2 3 4
+    M 0 1 2 3 4
+''')
+
+sampler = circuit.compile_sampler()
+
+# Small batches (slower)
+samples = sampler.sample(10000, batch_size=100)
+
+# Large batches (faster on GPU)
+samples = sampler.sample(10000, batch_size=4096)
+```
+
+</CodeGroup>
+
+### Reproducibility
+
+The sampler uses a deterministic seed for reproducible results:
+
+```python
+circuit = Circuit("H 0\nM 0")
+
+# Same seed produces same sequence
+sampler1 = circuit.compile_sampler(seed=42)
+samples1a = sampler1.sample(100)
+samples1b = sampler1.sample(100)
+
+sampler2 = circuit.compile_sampler(seed=42)
+samples2a = sampler2.sample(100)
+samples2b = sampler2.sample(100)
+
+# First 100 shots match
+assert (samples1a == samples2a).all()
+
+# But second 100 shots differ (different RNG state)
+assert not (samples1b == samples2b).all()
+```
+
+## CompiledDetectorSampler
+
+Samples detector and observable outcomes from a quantum circuit with error detection.
+
+### Constructor
+
+```python
+def __init__(self, circuit: Circuit, *, seed: int | None = None)
+```
+
+Create a detector sampler by compiling the circuit.
+
+<ParamField path="circuit" type="Circuit" required>
+  The quantum circuit to compile. Must include DETECTOR and/or OBSERVABLE_INCLUDE instructions.
+</ParamField>
+
+<ParamField path="seed" type="int | None" default="None">
+  Random seed for reproducible sampling. If None, a random seed is generated.
+</ParamField>
+
+**Example:**
+
+```python
+from tsim import Circuit
+
+circuit = Circuit('''
+    R 0 1
+    H 0
+    CNOT 0 1
+    M 0 1
+    DETECTOR rec[-1]
+    OBSERVABLE_INCLUDE(0) rec[-2]
+''')
+
+sampler = circuit.compile_detector_sampler(seed=42)
+```
+
+### `sample`
+
+```python
+def sample(
+    self,
+    shots: int,
+    *,
+    batch_size: int | None = None,
+    prepend_observables: bool = False,
+    append_observables: bool = False,
+    separate_observables: bool = False,
+    bit_packed: bool = False
+) -> np.ndarray | tuple[np.ndarray, np.ndarray]
+```
+
+Sample detector and observable outcomes from the circuit.
+
+<ParamField path="shots" type="int" required>
+  The number of times to sample every detector in the circuit.
+</ParamField>
+
+<ParamField path="batch_size" type="int | None" default="None">
+  The number of samples to process in each batch. When using a GPU, increase this value until VRAM is fully utilized. If None, processes all shots at once.
+</ParamField>
+
+<ParamField path="separate_observables" type="bool" default="False">
+  When True, returns a tuple `(detectors, observables)` instead of a single array.
+</ParamField>
+
+<ParamField path="prepend_observables" type="bool" default="False">
+  When True, observables are included at the start of the results.
+</ParamField>
+
+<ParamField path="append_observables" type="bool" default="False">
+  When True, observables are included at the end of the results.
+</ParamField>
+
+<ParamField path="bit_packed" type="bool" default="False">
+  When True, results are bit-packed into uint8 arrays for memory efficiency.
+</ParamField>
+
+**Returns:** 
+- If `separate_observables=False`: numpy array of shape `(shots, num_detectors)` or `(shots, num_detectors + num_observables)`
+- If `separate_observables=True`: tuple of `(detectors, observables)` arrays
+
+**Examples:**
+
+<CodeGroup>
+
+```python Basic Usage
+from tsim import Circuit
+
+circuit = Circuit('''
+    R 0 1
+    H 0
+    CNOT 0 1
+    M 0 1
+    DETECTOR rec[-1]
+    DETECTOR rec[-2]
+    OBSERVABLE_INCLUDE(0) rec[-1]
+''')
+
+sampler = circuit.compile_detector_sampler(seed=42)
+
+# Sample only detectors (default)
+detectors = sampler.sample(shots=1000)
+print(detectors.shape)  # (1000, 2)
+```
+
+```python With Observables
+circuit = Circuit('''
+    R 0 1 2
+    X 2
+    M 0 1 2
+    DETECTOR rec[-2]
+    DETECTOR rec[-3]
+    OBSERVABLE_INCLUDE(0) rec[-1]
+''')
+
+sampler = circuit.compile_detector_sampler()
+
+# Separate arrays for detectors and observables
+detectors, observables = sampler.sample(
+    shots=1000,
+    separate_observables=True
+)
+print(detectors.shape)    # (1000, 2)
+print(observables.shape)  # (1000, 1)
+
+# Append observables to detectors
+combined = sampler.sample(
+    shots=1000,
+    append_observables=True
+)
+print(combined.shape)  # (1000, 3)
+```
+
+```python Error Correction
+import pymatching
+
+# Generate a surface code circuit
+circuit = Circuit.from_stim_program(
+    stim.Circuit.generated(
+        "surface_code:rotated_memory_x",
+        distance=3,
+        rounds=5,
+        after_clifford_depolarization=0.01
+    )
+)
+
+sampler = circuit.compile_detector_sampler(seed=42)
+
+# Sample detection events and observable flips
+detectors, observables = sampler.sample(
+    shots=10000,
+    separate_observables=True
+)
+
+# Decode using pymatching
+dem = circuit.detector_error_model(decompose_errors=True)
+matcher = pymatching.Matching.from_detector_error_model(dem)
+predictions = matcher.decode_batch(detectors)
+
+# Compute logical error rate
+errors = np.logical_xor(observables, predictions)
+error_rate = errors.mean()
+print(f"Logical error rate: {error_rate:.4f}")
+```
+
+```python Bit Packing
+circuit = Circuit('''
+    R 0 1 2 3 4
+    M 0 1 2 3 4
+    DETECTOR rec[-1]
+    DETECTOR rec[-2]
+    DETECTOR rec[-3]
+    DETECTOR rec[-4]
+    DETECTOR rec[-5]
+''')
+
+sampler = circuit.compile_detector_sampler()
+
+# Unpacked (bool array)
+unpacked = sampler.sample(1000, bit_packed=False)
+print(unpacked.shape)   # (1000, 5)
+print(unpacked.dtype)   # bool
+
+# Bit-packed (uint8 array, 8x memory reduction)
+packed = sampler.sample(1000, bit_packed=True)
+print(packed.shape)     # (1000, 1) - 5 bits fit in 1 byte
+print(packed.dtype)     # uint8
+```
+
+```python Observable Ordering
+circuit = Circuit('''
+    R 0 1
+    M 0 1
+    DETECTOR rec[-1]
+    OBSERVABLE_INCLUDE(0) rec[-2]
+''')
+
+sampler = circuit.compile_detector_sampler()
+
+# Default: only detectors
+d = sampler.sample(1)
+print(d.shape)  # (1, 1)
+
+# Append: [detectors, observables]
+d = sampler.sample(1, append_observables=True)
+print(d.shape)  # (1, 2)
+
+# Prepend: [observables, detectors]
+d = sampler.sample(1, prepend_observables=True)
+print(d.shape)  # (1, 2)
+```
+
+</CodeGroup>
+
+## CompiledStateProbs
+
+Computes measurement probabilities for specific quantum states. Useful for analyzing circuit behavior without full sampling.
+
+### Constructor
+
+```python
+def __init__(
+    self,
+    circuit: Circuit,
+    *,
+    sample_detectors: bool = False,
+    seed: int | None = None
+)
+```
+
+Create a probability estimator by compiling the circuit.
+
+<ParamField path="circuit" type="Circuit" required>
+  The quantum circuit to compile.
+</ParamField>
+
+<ParamField path="sample_detectors" type="bool" default="False">
+  If True, compute detector/observable probabilities instead of measurement probabilities.
+</ParamField>
+
+<ParamField path="seed" type="int | None" default="None">
+  Random seed for error channel sampling. If None, a random seed is generated.
+</ParamField>
+
+**Example:**
+
+```python
+from tsim import Circuit
+from tsim.sampler import CompiledStateProbs
+
+circuit = Circuit('''
+    H 0
+    CNOT 0 1
+    M 0 1
+''')
+
+prob_sampler = CompiledStateProbs(circuit)
+```
+
+### `probability_of`
+
+```python
+def probability_of(self, state: np.ndarray, *, batch_size: int) -> np.ndarray
+```
+
+Compute probabilities for a batch of error samples given a measurement state.
+
+<ParamField path="state" type="np.ndarray" required>
+  The measurement outcome state to compute probability for. Boolean array of shape `(num_measurements,)`.
+</ParamField>
+
+<ParamField path="batch_size" type="int" required>
+  Number of error samples to use for probability estimation.
+</ParamField>
+
+**Returns:** Array of probabilities P(state | error_sample) for each error sample, shape `(batch_size,)`.
+
+**Example:**
+
+```python
+import numpy as np
+from tsim import Circuit
+from tsim.sampler import CompiledStateProbs
+
+circuit = Circuit('''
+    H 0
+    X_ERROR(0.1) 0
+    M 0
+''')
+
+prob_sampler = CompiledStateProbs(circuit)
+
+# Probability of measuring |0⟩
+state_0 = np.array([False])
+probs_0 = prob_sampler.probability_of(state_0, batch_size=100)
+print(f"P(0) ≈ {probs_0.mean():.3f}")
+
+# Probability of measuring |1⟩
+state_1 = np.array([True])
+probs_1 = prob_sampler.probability_of(state_1, batch_size=100)
+print(f"P(1) ≈ {probs_1.mean():.3f}")
+```
+
+## Sampler Statistics
+
+All sampler classes provide a detailed `__repr__` showing compilation statistics:
+
+```python
+circuit = Circuit('''
+    H 0
+    X_ERROR(0.1) 0 1
+    M 0 1
+''')
+
+sampler = circuit.compile_sampler()
+print(sampler)
+# Output:
+# CompiledMeasurementSampler(42 graphs, 2 error channel bits,
+#   2 outputs for largest cc, ≤ 4 parameters, 128 A terms,
+#   64 B terms, 32 C terms, 16 D terms, 12.3 kB)
+```
+
+This shows:
+- **graphs**: Total number of compiled scalar graphs
+- **error channel bits**: Number of error parameter bits
+- **outputs for largest cc**: Maximum outputs in any connected component
+- **parameters**: Maximum input parameters to any graph
+- **A/B/C/D terms**: Internal term counts for different evaluation stages
+- **Memory**: Total memory used by compiled data structures
+
+## Performance Tips
+
+<Note>
+**GPU Acceleration**: Samplers automatically use JAX's default device. Set `JAX_PLATFORMS=gpu` to enable GPU acceleration for significant speedups on large circuits.
+</Note>
+
+1. **Batch Size**: Increase `batch_size` when using GPU to maximize parallelism
+   ```python
+   # CPU: smaller batches
+   samples = sampler.sample(100000, batch_size=1024)
+   
+   # GPU: larger batches (use more VRAM)
+   samples = sampler.sample(100000, batch_size=16384)
+   ```
+
+2. **Reuse Samplers**: Compilation is expensive, reuse samplers for multiple sampling runs
+   ```python
+   sampler = circuit.compile_sampler(seed=42)
+   for i in range(10):
+       samples = sampler.sample(1000)  # Fast repeated sampling
+   ```
+
+3. **Bit Packing**: Use `bit_packed=True` for large detector sampling to reduce memory
+   ```python
+   # 8x memory reduction for detector data
+   detectors = sampler.sample(1000000, bit_packed=True)
+   ```
+
+4. **Separate Observables**: Only compute observables when needed
+   ```python
+   # Don't compute observables if not needed
+   detectors = sampler.sample(10000)  # Faster
+   
+   # Only compute when required for error correction
+   detectors, obs = sampler.sample(10000, separate_observables=True)
+   ```
+
+## See Also
+
+- [Circuit](/api/circuit) - Build and compile quantum circuits
+- [Stim Documentation](https://github.com/quantumlib/Stim) - Learn about STIM format and detectors

@@ -1,0 +1,273 @@
+---
+title: "evaluate()"
+description: "Evaluate compiled circuits with batched parameter values using exact arithmetic"
+---
+
+Defined in `src/tsim/compile/evaluate.py:57`
+
+## Function Signature
+
+```python
+@jax.jit
+def evaluate(circuit: CompiledScalarGraphs, param_vals: Array) -> Array
+```
+
+Evaluate a compiled circuit with batched binary parameter values. Uses exact arithmetic (dyadic rationals) to avoid floating-point precision issues during intermediate computations.
+
+<Note>
+  This function is JIT-compiled with `@jax.jit` for high performance on GPU/TPU.
+</Note>
+
+## Parameters
+
+<ParamField path="circuit" type="CompiledScalarGraphs" required>
+  Compiled circuit representation from `compile_scalar_graphs()`. Contains static-shaped JAX arrays encoding:
+  - Node phase terms (Type A)
+  - Half-pi phase terms (Type B)
+  - Pi-pair terms (Type C)
+  - Phase-pair terms (Type D)
+  - Scalar factors and normalization
+</ParamField>
+
+<ParamField path="param_vals" type="Array" required>
+  Binary parameter values with shape `(batch_size, n_params)`.
+  
+  Each row represents one configuration of parameters:
+  - **f-parameters**: Error bits (transformed from e-parameters)
+  - **m-parameters**: Measurement/detector outcomes
+  
+  Values must be 0 or 1 (dtype: `uint8` or `int32`).
+</ParamField>
+
+## Returns
+
+<ResponseField name="amplitudes" type="Array">
+  Complex array of shape `(batch_size,)` containing the evaluated amplitudes.
+  
+  Each element is the quantum amplitude for the corresponding parameter configuration:
+  ```python
+  amplitude = circuit(param_vals[i])
+  ```
+  
+  Dtype: `complex64` or `complex128` depending on circuit configuration.
+</ResponseField>
+
+## Evaluation Algorithm
+
+The evaluation proceeds in four phases, corresponding to the four types of parametrized phase terms in ZX diagrams:
+
+### Type A: Node Terms (1 + e^(iα))
+
+Phase terms attached to spider vertices in the ZX graph:
+
+```python
+# Compute parameter-dependent phase: α = const + 4π * parity(params)
+rowsum_a = _matmul_gf2(circuit.a_param_bits, param_vals)
+phase_idx_a = (4 * rowsum_a + circuit.a_const_phases) % 8
+
+# Look up (1 + e^(iα)) in precomputed table
+term_vals_a_exact = _ONE_PLUS_PHASES[phase_idx_a]
+
+# Mask out padding (set padded terms to identity)
+term_vals_a_exact = jnp.where(a_mask[..., None], term_vals_a_exact, _IDENTITY)
+
+# Product over all Type A terms
+summands_a = term_vals_a.prod(axis=-2)
+```
+
+<Info>
+  **Precomputed Table**: `_ONE_PLUS_PHASES` contains exact representations of (1 + ω^k) for k=0..7, where ω = e^(iπ/4). This avoids floating-point arithmetic.
+</Info>
+
+### Type B: Half-Pi Terms (e^(iβ))
+
+Terms from half-pi phase parameters (π/2 and 3π/2):
+
+```python
+# Compute phases: β = j * π/2 * parity(params), j ∈ {1, 3}
+rowsum_b = _matmul_gf2(circuit.b_param_bits, param_vals)
+phase_idx_b = (rowsum_b * circuit.b_term_types) % 8
+
+# Sum phases and look up in table
+sum_phases_b = jnp.sum(phase_idx_b, axis=-1) % 8
+summands_b_exact = _UNIT_PHASES[sum_phases_b]
+```
+
+<Note>
+  Type B terms are summed (additive group structure) rather than multiplied. Padding is naturally 0 (additive identity).
+</Note>
+
+### Type C: Pi-Pair Terms (-1)^(ψφ)
+
+Terms from pairs of π-valued parameters:
+
+```python
+# Compute parities: ψ = const_a + parity(params_a), φ = const_b + parity(params_b)
+rowsum_a_c = (circuit.c_const_bits_a + _matmul_gf2(circuit.c_param_bits_a, param_vals)) % 2
+rowsum_b_c = (circuit.c_const_bits_b + _matmul_gf2(circuit.c_param_bits_b, param_vals)) % 2
+
+# Compute (-1)^(ψφ)
+exponent_c = (rowsum_a_c * rowsum_b_c) % 2
+sum_exponents_c = jnp.sum(exponent_c, axis=-1) % 2
+summands_c_exact = (1 - 2 * sum_exponents_c)[..., None] * [1, 0, 0, 0]
+```
+
+### Type D: Phase Pairs (1 + e^α + e^β - e^γ)
+
+Terms from pairs of general phase parameters (γ = α + β):
+
+```python
+# Compute phases: α, β, γ = α + β
+rowsum_a_d = _matmul_gf2(circuit.d_param_bits_a, param_vals)
+rowsum_b_d = _matmul_gf2(circuit.d_param_bits_b, param_vals)
+
+alpha = (circuit.d_const_alpha + rowsum_a_d * 4) % 8
+beta = (circuit.d_const_beta + rowsum_b_d * 4) % 8
+gamma = (alpha + beta) % 8
+
+# Compute 1 + e^α + e^β - e^γ
+term_vals_d_exact = _IDENTITY + _UNIT_PHASES[alpha] + _UNIT_PHASES[beta] - _UNIT_PHASES[gamma]
+
+# Mask padding and take product
+term_vals_d_exact = jnp.where(d_mask[..., None], term_vals_d_exact, _IDENTITY)
+summands_d = term_vals_d.prod(axis=-2)
+```
+
+### Final Combination
+
+Multiply all terms and apply global factors:
+
+```python
+# Static phase: e^(iφ)
+static_phases = ExactScalarArray(_UNIT_PHASES[circuit.phase_indices])
+
+# Combine all terms
+total_summands = summands_a * summands_b * summands_c * summands_d * static_phases * float_factor
+
+# Apply power-of-2 normalization and sum over graphs
+if not circuit.has_approximate_floatfactors:
+    total_summands = ExactScalarArray(
+        total_summands.coeffs, total_summands.power + circuit.power2
+    )
+    total_summands = total_summands.reduce()
+    return total_summands.sum().to_complex()
+else:
+    return jnp.sum(
+        total_summands.to_complex()
+        * circuit.approximate_floatfactors
+        * 2.0**circuit.power2,
+        axis=-1,
+    )
+```
+
+## Exact Arithmetic
+
+The evaluation uses `ExactScalarArray` for intermediate computations to maintain exact precision:
+
+<ParamField path="ExactScalarArray" type="class">
+  Represents numbers in the form:
+  ```
+  (a + b√2 + ci + di√2) × 2^k
+  ```
+  where a, b, c, d are integers and k is the power-of-2 exponent.
+  
+  This representation is closed under addition and multiplication, allowing exact computation of all ZX diagram scalar values.
+</ParamField>
+
+<Info>
+  **Why Exact Arithmetic?** Quantum amplitudes can involve square roots and complex phases that accumulate precision errors in standard floating-point arithmetic. Exact arithmetic ensures correctness for verification and debugging.
+</Info>
+
+## GF(2) Matrix Multiplication
+
+Binary parameter evaluation uses optimized GF(2) matrix multiplication:
+
+```python
+def _matmul_gf2(a: Array, b: Array) -> Array:
+    """Compute binary dot products mod 2 as a_GTP x b_BP -> b_BGT.
+    
+    Args:
+        a: Parameter bit-masks, shape (G, T, P)
+        b: Binary parameter values, shape (B, P)
+    
+    Returns:
+        Binary row-sums mod 2, shape (B, G, T)
+    """
+    G, T, _ = a.shape
+    if G * T == 0:
+        return jnp.zeros((b.shape[0], G, T), dtype=b.dtype)
+    return (b.astype(jnp.float32) @ a.astype(jnp.float32).reshape(G * T, -1).T).reshape(
+        -1, G, T
+    ).astype(jnp.uint8) % 2
+```
+
+<Note>
+  Uses float32 matmul (has BLAS acceleration on CPU) then converts back to uint8. Integer matmul lacks BLAS support on many platforms.
+</Note>
+
+## Example Usage
+
+```python
+import jax.numpy as jnp
+from tsim.compile.evaluate import evaluate
+
+# Assume we have a compiled circuit
+# circuit: CompiledScalarGraphs with n_params=5
+
+# Create batch of parameter values
+batch_size = 1000
+param_vals = jnp.array([
+    [0, 1, 0, 1, 1],  # Configuration 1
+    [1, 0, 1, 0, 0],  # Configuration 2
+    # ... more configurations
+], dtype=jnp.uint8)
+
+# Evaluate
+amplitudes = evaluate(circuit, param_vals)  # shape: (1000,)
+
+# Check probabilities
+probabilities = jnp.abs(amplitudes) ** 2
+print(f"Sum of probabilities: {jnp.sum(probabilities)}")
+```
+
+## Performance Characteristics
+
+<CardGroup cols={2}>
+  <Card title="JIT Compilation" icon="bolt">
+    First call incurs JIT compilation overhead. Subsequent calls are fast.
+  </Card>
+  <Card title="GPU Acceleration" icon="microchip">
+    Matrix operations are automatically accelerated on GPU/TPU via JAX.
+  </Card>
+  <Card title="Batching" icon="layer-group">
+    Efficiently processes thousands of parameter configurations in parallel.
+  </Card>
+  <Card title="Memory Layout" icon="table">
+    Static array shapes enable efficient memory access patterns.
+  </Card>
+</CardGroup>
+
+## Implementation Notes
+
+<Warning>
+  **First Call Latency**: The first call to `evaluate()` triggers JIT compilation, which can take seconds. Subsequent calls with the same circuit structure are fast (~microseconds per batch).
+</Warning>
+
+<Info>
+  **Padding Strategy**: Different term types use different padding strategies:
+  - Type A/D (multiplicative): Pad with identity (1)
+  - Type B/C (additive): Pad with zero (0)
+  
+  This ensures padded terms don't affect results.
+</Info>
+
+## Related Functions
+
+- `compile_scalar_graphs()` - Creates the `CompiledScalarGraphs` input
+- `compile_program()` - High-level compilation entry point
+- `ExactScalarArray` - Exact arithmetic data structure
+
+## See Also
+
+- [Compilation Pipeline](/api/compile/pipeline) - How circuits are compiled
+- [Compilation Overview](/api/compile/overview) - High-level architecture

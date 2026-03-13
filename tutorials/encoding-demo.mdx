@@ -1,0 +1,337 @@
+---
+title: 'Quantum State Encoding with a Color Code'
+description: 'Learn the basics of tsim by simulating quantum state encoding, detectors, observables, and error correction with the Steane code'
+---
+
+This tutorial showcases the basic functionality of **tsim**, a circuit sampler for Clifford+T circuits based on stabilizer rank decomposition and ZX-calculus techniques. It closely follows the API of stim and directly uses stim's circuit format.
+
+<Info>
+In contrast to Stim, tsim supports `T` and `T_DAG` instructions, enabling simulation of non-Clifford circuits.
+</Info>
+
+## Basic Circuit Simulation
+
+<Steps>
+  <Step title="Import Dependencies">
+    Start by importing the necessary libraries:
+
+    ```python
+    from tsim import Circuit
+    import sinter
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from tesseract_decoder import tesseract, TesseractSinterDecoder
+    from utils.no_decoder import NoDecoder
+    ```
+  </Step>
+
+  <Step title="Create a Simple Circuit">
+    The following circuit demonstrates tsim's capability by preparing and measuring the state:
+
+    $$H\,T\,|+\rangle = e^{i\pi/8}\Big[\cos\!\left(\tfrac{\pi}{8}\right)\,|0\rangle \;-\; i\,\sin\!\left(\tfrac{\pi}{8}\right)\,|1\rangle\Big]$$
+
+    ```python
+    c = Circuit(
+        """
+        RX 0
+        T 0
+        H 0
+        M 0
+        """
+    )
+    c.diagram("timeline-svg", height=150)
+    ```
+  </Step>
+
+  <Step title="Compile and Sample">
+    To sample from this circuit, compile it into a sampler:
+
+    ```python
+    sampler = c.compile_sampler()
+    ```
+
+    Then sample bitstrings from the measurement instructions:
+
+    ```python
+    sampler.sample(shots=10)
+    ```
+  </Step>
+
+  <Step title="Estimate Probabilities">
+    Run a large number of shots to estimate the probability of measuring `1`:
+
+    ```python
+    samples = sampler.sample(shots=10_000_000, batch_size=1_000_000)
+    int(np.count_nonzero(samples)) / len(samples)
+    ```
+
+    As expected, the probability is close to $\sin(\pi/8)^2 \approx 0.1464$.
+  </Step>
+</Steps>
+
+## Detectors and Observables
+
+Next, we consider a more complex example: an encoding circuit for the [[7,1,3]] Steane code. This circuit prepares the logical state:
+
+$$\frac{1}{2}\Big[(1 + e^{i\pi/4})|\bar{0}\rangle + (1 - e^{i\pi/4})|\bar{1}\rangle\Big]$$
+
+<Steps>
+  <Step title="Define the Steane Code Circuit">
+    ```python
+    c = Circuit(
+        """
+        RX 6
+        T 6
+        H 6
+        R 0 1 2 3 4 5
+        SQRT_Y_DAG 0 1 2 3 4 5
+        CZ 1 2 3 4 5 6
+        SQRT_Y 6
+        CZ 0 3 2 5 4 6
+        SQRT_Y 2 3 4 5 6
+        CZ 0 1 2 3 4 5
+        SQRT_Y 1 2 4
+        X 3
+        TICK
+        M 0 1 2 3 4 5 6
+        DETECTOR rec[-7] rec[-6] rec[-5] rec[-4]
+        DETECTOR rec[-6] rec[-5] rec[-3] rec[-2]
+        DETECTOR rec[-5] rec[-4] rec[-3] rec[-1]
+        OBSERVABLE_INCLUDE(0) rec[-7] rec[-6] rec[-2]
+        """
+    )
+    ```
+  </Step>
+
+  <Step title="Visualize the Circuit">
+    tsim supports multiple visualization methods. The default is a ZX diagram, where measurement vertices are annotated with `rec[i]`, and detector and observable vertices are annotated with `det[i]` and `obs[i]`:
+
+    ```python
+    c.diagram();
+    ```
+
+    tsim also wraps stim's visualization functions:
+
+    ```python
+    c.diagram("timeline-svg", height=350)
+    ```
+  </Step>
+
+  <Step title="Sample Detection Events">
+    To sample detection events and logical observables, compile a detector sampler:
+
+    ```python
+    det_sampler = c.compile_detector_sampler(seed=1)
+    ```
+
+    ```python
+    det_samples, obs_samples = det_sampler.sample(shots=100_000, separate_observables=True)
+    print(det_samples[:5])
+    print(obs_samples[:5])
+    ```
+  </Step>
+
+  <Step title="Verify Results">
+    Since the circuit is just a logical encoding of the 1-qubit circuit from the beginning of the tutorial, the logical observable should behave exactly like the physical qubit.
+
+    Since the circuit is noiseless, we should not observe any non-zero detection events:
+
+    ```python
+    assert np.count_nonzero(det_samples) == 0
+    int(np.count_nonzero(obs_samples)) / len(obs_samples)
+    ```
+  </Step>
+</Steps>
+
+## Adding Noise
+
+<Tip>
+A core capability of tsim is its support for Pauli noise channels.
+</Tip>
+
+<Steps>
+  <Step title="Create a Noisy Circuit">
+    Let's insert depolarizing channels into the circuit:
+
+    ```python
+    def make_circuit(p):
+        return Circuit(
+            f"""
+            RX 6
+            T 6
+            H 6
+            R 0 1 2 3 4 5
+            TICK
+            SQRT_Y_DAG 0 1 2 3 4 5
+            DEPOLARIZE1({p}) 0 1
+            TICK
+            CZ 1 2 3 4 5 6
+            DEPOLARIZE2({p}) 1 2
+            TICK
+            SQRT_Y 6
+            DEPOLARIZE1({p}) 6
+            TICK
+            CZ 0 3 2 5 4 6
+            TICK
+            SQRT_Y 2 3 4 5 6
+            DEPOLARIZE1({p}) 2 4 6
+            TICK
+            CZ 0 1 2 3 4 5
+            TICK
+            DEPOLARIZE1({p}) 0 1 2 3 4 5 6
+            SQRT_Y 1 2 4
+            X 3
+            TICK
+            M 0 1 2 3 4 5 6
+            DETECTOR rec[-7] rec[-6] rec[-5] rec[-4]
+            DETECTOR rec[-6] rec[-5] rec[-3] rec[-2]
+            DETECTOR rec[-5] rec[-4] rec[-3] rec[-1]
+            OBSERVABLE_INCLUDE(0) rec[-7] rec[-6] rec[-2]
+            """
+        )
+
+    c = make_circuit(0.01)
+    ```
+  </Step>
+
+  <Step title="Visualize the Noisy Circuit">
+    ```python
+    c.diagram("timeline-svg", height=350)
+    ```
+
+    In the ZX diagram, the noise is represented by parametrized vertices with binary parameters `e0`, `e1`, etc. Since a depolarizing channel can apply X, Y, or Z gates, each channel requires two bits (an X and a Z vertex):
+
+    ```python
+    c.diagram("pyzx");
+    ```
+  </Step>
+
+  <Step title="Sample from the Noisy Circuit">
+    Compile the sampler and sample from the noisy circuit:
+
+    ```python
+    det_sampler = c.compile_detector_sampler()
+    ```
+
+    You should now see some non-zero detector events:
+
+    ```python
+    det_samples, obs_samples = det_sampler.sample(shots=10_000, separate_observables=True)
+    print(det_samples[:5], "\nTriggered detection events:", np.count_nonzero(det_samples))
+    print(obs_samples[:5])
+    ```
+  </Step>
+
+  <Step title="Measure Observable Probability">
+    Calculate the probability of measuring a logical $|\bar{1}\rangle$. Due to the noise, it deviates from the ideal value:
+
+    ```python
+    int(np.count_nonzero(obs_samples)) / len(obs_samples)
+    ```
+  </Step>
+</Steps>
+
+## Error Detection
+
+One simple error correction strategy is **post-selection**: discard any shots where a detector fired (indicating an error occurred). This projects back to the code space but reduces the success rate (yield).
+
+```python
+perfect_stabilizers = np.all(det_samples == 0, axis=1)
+post_selected_obs = obs_samples[perfect_stabilizers]
+int(np.count_nonzero(post_selected_obs)) / len(post_selected_obs)
+```
+
+## Error Correction
+
+To actively correct errors, we need a **decoder**. A decoder takes the detector syndrome and predicts whether the observable should be flipped.
+
+<Steps>
+  <Step title="Get the Detector Error Model">
+    ```python
+    c.detector_error_model()
+    ```
+  </Step>
+
+  <Step title="Configure the Tesseract Decoder">
+    In this example, we use the [tesseract](https://github.com/quantumlib/tesseract-decoder) decoder:
+
+    ```python
+    config = tesseract.TesseractConfig(dem=c.detector_error_model())
+    decoder = config.compile_decoder()
+    ```
+  </Step>
+
+  <Step title="Apply Error Correction">
+    ```python
+    obs_corrected = np.zeros_like(obs_samples)
+    for i, det_sample in enumerate(det_samples):
+        flip_obs = decoder.decode(det_sample)
+        obs_corrected[i] = np.logical_xor(obs_samples[i], flip_obs[0])
+
+    print("Raw obs.: ", int(np.count_nonzero(obs_samples)) / len(obs_samples))
+    print("Corrected:", int(np.count_nonzero(obs_corrected)) / len(obs_corrected))
+    ```
+
+    After correction, the probability of getting a logical $|\bar{1}\rangle$ is close to the ideal value.
+  </Step>
+</Steps>
+
+## Monte Carlo Simulation with Sinter
+
+tsim is compatible with [sinter](https://github.com/quantumlib/Stim/blob/main/doc/sinter.md), a tool for performing large Monte Carlo simulations. We can use sinter to sample and decode over a range of physical error rates.
+
+<Steps>
+  <Step title="Set Up Decoders and Tasks">
+    ```python
+    tesseract_dec = TesseractSinterDecoder()
+    no_dec = NoDecoder()
+
+    tasks = [
+        sinter.Task(
+            circuit=make_circuit(noise).cast_to_stim(),
+            json_metadata={"p": noise},
+        )
+        for noise in np.logspace(-3.3, -0.2, 6)
+    ]
+    ```
+  </Step>
+
+  <Step title="Run the Simulation">
+    ```python
+    collected_stats = sinter.collect(
+        num_workers=1,
+        tasks=tasks,
+        decoders=["tesseract", "no decoding"],
+        max_shots=1024 * 64,
+        max_errors=1024 * 64,
+        custom_decoders={"tesseract": tesseract_dec, "no decoding": NoDecoder()},
+        start_batch_size=1024 * 64,
+        max_batch_size=1024 * 64,
+    )
+    ```
+  </Step>
+
+  <Step title="Visualize the Results">
+    sinter provides convenient plotting tools. Here we plot the observable flip rate as a function of the physical error rate:
+
+    ```python
+    fig, ax = plt.subplots(1, 1)
+    sinter.plot_error_rate(
+        ax=ax,
+        stats=collected_stats,
+        x_func=lambda stats: stats.json_metadata["p"],
+        group_func=lambda stats: stats.decoder,
+    )
+    ax.loglog()
+    ax.set_xlabel("Physical Error Rate")
+    ax.set_ylabel(f"Probability of logical $|\\bar{1}\\rangle$")
+    ax.axhline(np.sin(np.pi / 8) ** 2, color="k", linestyle="--", lw=0.4)
+    ax.text(0.1, np.sin(np.pi / 8) ** 2 * 1.01, "$\\sin(\\pi/8)^2$", fontsize=10)
+    ax.legend();
+    ```
+
+    <Note>
+    We observe that the decoded probability approaches the expected value of $\sin(\pi/8)^2$ much faster than without decoding.
+    </Note>
+  </Step>
+</Steps>

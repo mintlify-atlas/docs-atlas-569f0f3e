@@ -1,0 +1,472 @@
+---
+title: Non-Clifford Gates
+description: Use T gates, arbitrary rotations, and general single-qubit unitaries in quantum circuits
+---
+
+Tsim extends Stim's Clifford gate set with support for non-Clifford operations, enabling simulation of universal quantum circuits. This guide covers the T gate, rotation gates, and the general U3 gate.
+
+## Why Non-Clifford Gates Matter
+
+**Clifford gates** (H, S, CNOT, etc.) can be simulated efficiently in polynomial time using the stabilizer formalism. However, they cannot perform universal quantum computation alone.
+
+**Non-Clifford gates** like T gates and arbitrary rotations are necessary for:
+- Universal quantum computation
+- Quantum algorithms (Shor's, Grover's, etc.)
+- Implementing arbitrary quantum error correction codes
+- Variational quantum algorithms (VQA/VQE)
+
+Tsim uses **stabilizer rank decomposition** via ZX-calculus to efficiently simulate circuits with a moderate number of non-Clifford gates.
+
+<Note>
+Simulation complexity grows exponentially with the number of non-Clifford gates. Tsim can efficiently handle hundreds of qubits if the circuit has relatively few T gates or arbitrary rotations.
+</Note>
+
+## T and T† Gates
+
+### Definition
+
+The T gate (also called π/8 gate) is the most common non-Clifford gate:
+
+$$
+T = \begin{pmatrix}
+1 & 0 \\\\
+0 & e^{i\pi/4}
+\end{pmatrix}, \quad
+T^\dagger = \begin{pmatrix}
+1 & 0 \\\\
+0 & e^{-i\pi/4}
+\end{pmatrix}
+$$
+
+The T gate applies a π/4 phase rotation to the $|1\rangle$ state.
+
+### Usage
+
+<CodeGroup>
+```python Shorthand Syntax
+circuit = tsim.Circuit('''
+    H 0
+    T 0      # Apply T gate
+    T_DAG 1  # Apply T† gate
+    CNOT 0 1
+''')
+```
+
+```python Explicit Tag Syntax
+# Equivalent internal representation
+circuit = tsim.Circuit('''
+    H 0
+    S[T] 0      # T is encoded as tagged S
+    S_DAG[T] 1  # T† is encoded as tagged S†
+    CNOT 0 1
+''')
+```
+
+```python Using append()
+circuit = tsim.Circuit()
+circuit.append("H", 0)
+circuit.append("T", 0)
+circuit.append("T_DAG", 1)
+circuit.append("CNOT", [0, 1])
+```
+</CodeGroup>
+
+### Properties
+
+**Relation to S gate:**
+$$
+T^2 = S = \begin{pmatrix}
+1 & 0 \\\\
+0 & i
+\end{pmatrix}
+$$
+
+**Inverse:**
+$$
+T \cdot T^\dagger = I
+$$
+
+### Example: T-gate Count
+
+Count the number of T gates in a circuit (a common complexity metric):
+
+```python
+circuit = tsim.Circuit('''
+    H 0
+    T 0
+    CNOT 0 1
+    T 1
+    T 0
+    H 1
+''')
+
+print(f"T-count: {circuit.tcount()}")
+# Output: T-count: 3
+```
+
+Lower T-count often means better simulation performance and easier implementation on quantum hardware.
+
+## Rotation Gates
+
+### Definitions
+
+Rotation gates rotate the qubit state around the X, Y, or Z axis by angle $\theta = \alpha \cdot \pi$:
+
+$$
+\begin{align*}
+R_X(\alpha) &= \begin{pmatrix}
+\cos(\alpha\pi/2) & -i\sin(\alpha\pi/2) \\\\
+-i\sin(\alpha\pi/2) & \cos(\alpha\pi/2)
+\end{pmatrix} \\\\
+R_Y(\alpha) &= \begin{pmatrix}
+\cos(\alpha\pi/2) & -\sin(\alpha\pi/2) \\\\
+\sin(\alpha\pi/2) & \cos(\alpha\pi/2)
+\end{pmatrix} \\\\
+R_Z(\alpha) &= \begin{pmatrix}
+e^{-i\alpha\pi/2} & 0 \\\\
+0 & e^{i\alpha\pi/2}
+\end{pmatrix}
+\end{align*}
+$$
+
+<Warning>
+**Important**: The parameter $\alpha$ specifies the rotation angle as a **multiple of π**, not in radians. For example:
+- `R_Z(0.5)` rotates by $\pi/2$ (90°)
+- `R_Z(1.0)` rotates by $\pi$ (180°)
+- `R_Z(2.0)` rotates by $2\pi$ (360°)
+</Warning>
+
+### Usage
+
+<CodeGroup>
+```python Program Text
+circuit = tsim.Circuit('''
+    R_X(0.5) 0   # π/2 rotation around X
+    R_Y(0.25) 1  # π/4 rotation around Y
+    R_Z(1.0) 2   # π rotation around Z
+''')
+```
+
+```python Using append()
+circuit = tsim.Circuit()
+circuit.append("R_X", 0, arg=0.5)
+circuit.append("R_Y", 1, arg=0.25)
+circuit.append("R_Z", 2, arg=1.0)
+```
+
+```python Negative Rotations
+# Rotate in opposite direction
+circuit = tsim.Circuit('''
+    R_Z(-0.25) 0  # -π/4 rotation
+''')
+```
+</CodeGroup>
+
+### Common Rotation Angles
+
+| Angle α | Rotation (radians) | Rotation (degrees) | Common Use |
+|---------|-------------------|-------------------|------------|
+| 0.25 | π/4 | 45° | T-like gates |
+| 0.5 | π/2 | 90° | Clifford gates (√X, √Y) |
+| 1.0 | π | 180° | Pauli gates (X, Y, Z) |
+| 2.0 | 2π | 360° | Full rotation (identity) |
+
+### Example: Creating Hadamard from Rotations
+
+The Hadamard gate can be decomposed as:
+
+$$
+H = \frac{1}{\sqrt{2}}(X + Z) = R_Y(0.5) \cdot R_Z(1.0)
+$$
+
+```python
+import numpy as np
+
+# Standard Hadamard
+circuit1 = tsim.Circuit("H 0")
+
+# Hadamard from rotations (up to global phase)
+circuit2 = tsim.Circuit('''
+    R_Z(1.0) 0
+    R_Y(0.5) 0
+''')
+
+# Compare unitaries (allowing for global phase)
+u1 = circuit1.to_matrix()
+u2 = circuit2.to_matrix()
+
+# Check equivalence up to global phase
+phase = u1[0, 0] / u2[0, 0]
+assert np.allclose(u1, phase * u2)
+```
+
+## U3 Gate
+
+### Definition
+
+The U3 gate is the most general single-qubit unitary, parameterized by three angles $(\theta, \phi, \lambda)$:
+
+$$
+U_3(\theta, \phi, \lambda) = \begin{pmatrix}
+\cos(\theta\pi/2) & -e^{i\lambda\pi}\sin(\theta\pi/2) \\\\
+e^{i\phi\pi}\sin(\theta\pi/2) & e^{i(\phi+\lambda)\pi}\cos(\theta\pi/2)
+\end{pmatrix}
+$$
+
+This gate can represent **any** single-qubit unitary up to a global phase.
+
+<Info>
+All three parameters are specified as **multiples of π**, consistent with rotation gates.
+</Info>
+
+### Usage
+
+<CodeGroup>
+```python Program Text
+circuit = tsim.Circuit('''
+    U3(0.5, 0.25, 0.125) 0
+''')
+# θ = π/2, φ = π/4, λ = π/8
+```
+
+```python Using append()
+circuit = tsim.Circuit()
+circuit.append("U3", 0, arg=(0.5, 0.25, 0.125))
+```
+
+```python Multiple Qubits
+circuit = tsim.Circuit('''
+    U3(0.3, 0.2, 0.1) 0
+    U3(0.4, 0.3, 0.2) 1
+    U3(0.5, 0.4, 0.3) 2
+''')
+```
+</CodeGroup>
+
+### Parameter Meaning
+
+- **θ (theta)**: Rotation angle about the Y axis
+- **φ (phi)**: Phase of the amplitude for $|1\rangle$
+- **λ (lambda)**: Phase of the amplitude for $|0\rangle$ and $|1\rangle$
+
+### Special Cases
+
+The U3 gate can represent many common gates:
+
+<CodeGroup>
+```python Identity
+# U3(0, 0, 0) = I
+circuit = tsim.Circuit("U3(0, 0, 0) 0")
+```
+
+```python Pauli Gates
+# X = U3(1, 0, 1)
+circuit = tsim.Circuit("U3(1, 0, 1) 0")
+
+# Y = U3(1, 0.5, 0.5) (up to global phase)
+circuit = tsim.Circuit("U3(1, 0.5, 0.5) 0")
+
+# Z = U3(0, 0, 1)
+circuit = tsim.Circuit("U3(0, 0, 1) 0")
+```
+
+```python Rotations
+# R_Z(α) = U3(0, 0, α)
+circuit = tsim.Circuit("U3(0, 0, 0.5) 0")  # Same as R_Z(0.5)
+
+# R_Y(α) = U3(α, 0, 0)
+circuit = tsim.Circuit("U3(0.5, 0, 0) 0")  # Same as R_Y(0.5)
+
+# R_X(α) = U3(α, -0.5, 0.5)
+circuit = tsim.Circuit("U3(0.5, -0.5, 0.5) 0")  # Same as R_X(0.5)
+```
+
+```python Hadamard
+# H = U3(0.5, 0, 1) (up to global phase)
+circuit = tsim.Circuit("U3(0.5, 0, 1) 0")
+```
+</CodeGroup>
+
+### Example: Variational Ansatz
+
+U3 gates are commonly used in variational quantum algorithms:
+
+```python
+import numpy as np
+
+def create_variational_circuit(params, n_layers):
+    """Create a variational ansatz with U3 gates.
+    
+    Args:
+        params: Array of shape (n_layers, 3*n_qubits)
+        n_layers: Number of ansatz layers
+    """
+    n_qubits = params.shape[1] // 3
+    circuit = tsim.Circuit()
+    
+    for layer in range(n_layers):
+        # Parameterized U3 gates
+        for q in range(n_qubits):
+            theta, phi, lam = params[layer, 3*q:3*q+3]
+            circuit.append("U3", q, arg=(theta, phi, lam))
+        
+        # Entangling layer
+        for q in range(n_qubits - 1):
+            circuit.append("CNOT", [q, q+1])
+    
+    # Measurements
+    circuit.append("M", list(range(n_qubits)))
+    return circuit
+
+# Example usage
+n_qubits = 3
+n_layers = 2
+params = np.random.rand(n_layers, 3 * n_qubits)
+
+circuit = create_variational_circuit(params, n_layers)
+sampler = circuit.compile_sampler(seed=0)
+samples = sampler.sample(1000)
+```
+
+## Circuit Inversion
+
+Non-Clifford gates are properly inverted:
+
+```python
+circuit = tsim.Circuit('''
+    H 0
+    T 0
+    R_Z(0.25) 0
+    U3(0.3, 0.2, 0.1) 1
+    CNOT 0 1
+''')
+
+# Get inverse circuit
+inverse = circuit.inverse()
+
+# Verify: circuit + inverse = identity (up to global phase)
+combined = circuit + inverse
+unitary = combined.to_matrix()
+
+identity = np.eye(unitary.shape[0])
+phase = unitary[0, 0]
+
+assert np.allclose(unitary, phase * identity)
+```
+
+Inversion rules:
+- $T^\dagger$ inverts to $T$
+- $R_X(\alpha)$ inverts to $R_X(-\alpha)$
+- $U_3(\theta, \phi, \lambda)$ inverts to $U_3(-\theta, -\lambda, -\phi)$
+
+## Performance Considerations
+
+### T-count Optimization
+
+Lower T-count typically means better performance:
+
+```python
+# Higher T-count (slower)
+circuit1 = tsim.Circuit('''
+    T 0
+    T 0
+    T 0
+    T 0  # T^4 = S^2 = Z
+''')
+
+# Lower T-count (faster)
+circuit2 = tsim.Circuit("Z 0")
+
+print(f"Circuit 1 T-count: {circuit1.tcount()}")  # 4
+print(f"Circuit 2 T-count: {circuit2.tcount()}")  # 0
+```
+
+### ZX-calculus Simplification
+
+Tsim uses ZX-calculus to automatically simplify circuits:
+
+```python
+# Get the internal ZX graph
+circuit = tsim.Circuit('''
+    H 0
+    T 0
+    T 0
+    H 0
+''')
+
+graph = circuit.get_graph()
+
+# Tsim automatically simplifies T^2 = S in the ZX representation
+```
+
+### Rotation vs T Gates
+
+Arbitrary rotations are generally more expensive than T gates:
+
+```python
+# Exact T gate (more efficient)
+circuit1 = tsim.Circuit("T 0")
+
+# Approximate T with rotation (less efficient)
+circuit2 = tsim.Circuit("R_Z(0.25) 0")  # Same unitary but slower
+
+# T gates are handled specially by stabilizer rank decomposition
+```
+
+## Best Practices
+
+<Steps>
+
+### Minimize non-Clifford gates
+
+Keep the number of T gates and arbitrary rotations small:
+
+```python
+# ✅ Good: 2 T gates
+circuit = tsim.Circuit('''
+    H 0
+    T 0
+    CNOT 0 1
+    T 1
+    M 0 1
+''')
+
+# ⚠️ Expensive: Many T gates
+circuit = tsim.Circuit('''
+    T 0
+    T 1
+    T 2
+    T 3
+    # ... 50+ T gates ...
+''')
+```
+
+### Use Clifford gates when possible
+
+Replace non-Clifford gates with Clifford equivalents when exact:
+
+```python
+# ❌ Unnecessary non-Clifford
+circuit = tsim.Circuit("R_Z(1.0) 0")  # This is just Z gate
+
+# ✅ Use Clifford instead
+circuit = tsim.Circuit("Z 0")
+```
+
+### Check T-count for complexity
+
+```python
+circuit = create_complex_circuit()
+tcount = circuit.tcount()
+
+if tcount &gt; 50:
+    print("Warning: High T-count may be slow")
+```
+
+</Steps>
+
+## Next Steps
+
+- Explore [GPU acceleration](/guides/gpu-acceleration) for faster non-Clifford simulation
+- Learn about [circuit construction](/guides/circuit-construction) techniques
+- Add [noise channels](/guides/noise-channels) to realistic circuits

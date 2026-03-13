@@ -1,0 +1,141 @@
+---
+title: "How tsim Works"
+description: "Understanding tsim's stabilizer rank decomposition approach for simulating Clifford+T circuits"
+---
+
+## Introduction
+
+tsim is a quantum circuit simulator designed for efficient sampling from Clifford+T circuits with Pauli noise. Unlike traditional state-vector simulators that scale exponentially with the number of qubits, tsim can simulate hundreds of qubits—as long as the circuit doesn't contain too many non-Clifford gates.
+
+The key innovation is **stabilizer rank decomposition** combined with **ZX-calculus simplification rules**, based on the work of [Sutcliffe and Kissinger (2025)](https://arxiv.org/abs/2403.06777).
+
+## The Core Idea
+
+<Steps>
+  <Step title="Convert circuits to ZX diagrams">
+    tsim converts quantum circuits into ZX diagrams, a graphical representation of quantum operations. This representation is built on top of `pyzx`, a Python library for ZX-calculus manipulation.
+  </Step>
+  
+  <Step title="Apply simplification rules">
+    ZX-calculus provides powerful simplification rules that can reduce the complexity of quantum circuits without changing their behavior. These rules help minimize the computational cost before simulation.
+  </Step>
+  
+  <Step title="Decompose into stabilizer components">
+    Non-Clifford gates are decomposed using stabilizer rank decomposition. Each non-Clifford gate increases the number of stabilizer "summands" that must be tracked, but Clifford gates remain efficient to simulate.
+  </Step>
+  
+  <Step title="Compile to JAX arrays">
+    The decomposed ZX diagrams are compiled into contiguous JAX arrays, enabling efficient parallel sampling on both CPUs and GPUs.
+  </Step>
+</Steps>
+
+## Stabilizer Rank Decomposition
+
+The heart of tsim's approach is decomposing quantum states into a sum of stabilizer states. Stabilizer states can be simulated efficiently using the stabilizer formalism, which requires only polynomial resources.
+
+For a quantum state |ψ⟩, we can write:
+
+```
+|ψ⟩ = Σᵢ αᵢ |stabᵢ⟩
+```
+
+Where each |stabᵢ⟩ is a stabilizer state and the sum runs over exponentially many terms (in the worst case).
+
+<Note>
+The **stabilizer rank** is the minimum number of stabilizer states needed to represent a quantum state. For Clifford circuits, the stabilizer rank is 1. Each T gate can increase the stabilizer rank by a factor of 2.
+</Note>
+
+### Computational Cost
+
+The simulation cost scales exponentially with the number of non-Clifford gates:
+
+- **Clifford gates** (H, S, CNOT, etc.): No increase in cost
+- **T gates**: Each T gate can double the number of stabilizer components
+- **Rotation gates** (R_X, R_Y, R_Z): Similar cost to T gates for small angles
+- **U3 gates**: Higher cost due to three rotation parameters
+
+<Warning>
+A circuit with n T gates may require up to 2ⁿ stabilizer components to simulate. In practice, ZX-calculus simplifications often reduce this significantly.
+</Warning>
+
+## ZX-Calculus Integration
+
+tsim leverages ZX-calculus to simplify circuits before decomposition. The ZX-calculus provides rewrite rules that:
+
+- Cancel adjacent gates that are inverses
+- Merge rotations on the same axis
+- Exploit circuit structure to reduce gate count
+- Simplify measurement and reset operations
+
+These simplifications happen automatically during circuit compilation and can dramatically reduce the effective number of non-Clifford gates.
+
+## Noise Modeling
+
+One of tsim's unique features is its support for Pauli noise channels throughout the circuit. Noise channels are injected into the ZX diagram as **parametrized Pauli vertices**, allowing tsim to:
+
+- Sample from noisy circuits efficiently
+- Support all Stim noise channels (DEPOLARIZE, PAULI_CHANNEL, etc.)
+- Handle non-deterministic detectors and observables
+
+<Info>
+Unlike Stim, which reports detector *flips* relative to a noiseless reference, tsim reports actual detector samples. This makes tsim more suitable for circuits where detectors may have non-deterministic behavior even in the noiseless case.
+</Info>
+
+## GPU Acceleration
+
+After decomposition, tsim compiles the circuit into a form optimized for parallel execution:
+
+<Accordion title="Compilation Pipeline Details">
+The compilation process involves several steps:
+
+1. **Parse the circuit**: Convert Stim-style circuit text into internal representation
+2. **Build ZX graph**: Create a parametrized ZX diagram
+3. **Apply simplifications**: Use ZX rewrite rules to reduce complexity
+4. **Stabilizer decomposition**: Break down non-Clifford components
+5. **Compile to JAX**: Convert to static-shaped arrays for GPU execution
+
+The result is a `CompiledScalarGraphs` object containing all circuit data in JAX arrays, ready for efficient sampling.
+</Accordion>
+
+tsim uses JAX's just-in-time (JIT) compilation to generate optimized GPU kernels. The first call to `sample()` triggers compilation, and subsequent calls with the same `batch_size` reuse the compiled kernel.
+
+<Tip>
+For GPU performance, increase `batch_size` until VRAM is exhausted. Larger batch sizes amortize the overhead of kernel launches and memory transfers.
+</Tip>
+
+## When to Use tsim
+
+tsim excels in scenarios where:
+
+- **You need non-Clifford gates** (T, rotation gates) but not too many
+- **You're working with large qubit counts** (hundreds of qubits)
+- **You want GPU acceleration** for sampling
+- **You need Pauli noise modeling** throughout the circuit
+- **You want compatibility with Stim** circuits and tooling
+
+tsim is less suitable when:
+
+- Your circuit contains many non-Clifford gates (>30-40 T gates)
+- You need exact amplitudes rather than samples
+- Your circuit is purely Clifford (use Stim directly instead)
+
+## Performance Characteristics
+
+The memory and time complexity of tsim sampling is:
+
+```
+Memory: O(n_qubits × stabilizer_rank)
+Time: O(shots × n_qubits × stabilizer_rank / batch_size)
+```
+
+Where `stabilizer_rank ≈ 2^(T_count)` and T_count is the number of T gates after ZX simplification.
+
+<Note>
+ZX-calculus simplifications can reduce the effective T-count significantly. For example, adjacent T and T† gates cancel completely, and certain circuit patterns allow for more efficient decompositions.
+</Note>
+
+## Next Steps
+
+- Learn more about [ZX-calculus](/concepts/zx-calculus) and its simplification rules
+- Understand [stabilizer rank decomposition](/concepts/stabilizer-rank) in detail
+- See how to [migrate from Stim to tsim](/concepts/from-stim-to-tsim)

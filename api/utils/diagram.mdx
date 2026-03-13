@@ -1,0 +1,209 @@
+---
+title: "diagram"
+description: "SVG diagram rendering for quantum circuits"
+---
+
+The `diagram` module provides utilities for rendering quantum circuits as SVG diagrams with support for custom gate labels and Jupyter notebook integration.
+
+## Classes
+
+### Diagram
+
+Wrapper for SVG diagrams with Jupyter notebook display support.
+
+```python
+class Diagram:
+    def __init__(self, svg: str)
+```
+
+<ParamField path="svg" type="str" required>
+  The SVG markup string to wrap
+</ParamField>
+
+The `Diagram` class automatically handles display in Jupyter notebooks through the `_repr_html_()` method, and can be converted to a string using `str()`.
+
+### GateLabel
+
+Label configuration for gates in SVG diagrams.
+
+```python
+@dataclass
+class GateLabel:
+    label: str
+    annotation: str | None = None
+```
+
+<ParamField path="label" type="str" required>
+  The gate label text (can contain SVG markup for special formatting)
+</ParamField>
+
+<ParamField path="annotation" type="str | None">
+  Optional annotation text shown below the gate (e.g., rotation angles)
+</ParamField>
+
+## Functions
+
+### render_svg()
+
+Render a Stim circuit as an SVG diagram with custom gate labels.
+
+```python
+def render_svg(
+    c: stim.Circuit,
+    type: str,
+    *,
+    tick: int | range | None = None,
+    filter_coords: Iterable[Iterable[float] | stim.DemTarget] = ((),),
+    rows: int | None = None,
+    width: float | None = None,
+    height: float | None = None,
+) -> Diagram
+```
+
+<ParamField path="c" type="stim.Circuit" required>
+  The Stim circuit to render
+</ParamField>
+
+<ParamField path="type" type="str" required>
+  The diagram type: `"timeline"` for a horizontal timeline view or `"timeslice"` for a vertical slice view
+</ParamField>
+
+<ParamField path="tick" type="int | range | None">
+  Specific tick(s) to render. If `None`, renders the entire circuit
+</ParamField>
+
+<ParamField path="filter_coords" type="Iterable[Iterable[float] | stim.DemTarget]">
+  Filter to specific qubit coordinates or detector error model targets
+</ParamField>
+
+<ParamField path="rows" type="int | None">
+  Number of rows for the diagram layout
+</ParamField>
+
+<ParamField path="width" type="float | None">
+  Explicit width for the SVG container in pixels
+</ParamField>
+
+<ParamField path="height" type="float | None">
+  Desired height in pixels. Used to compute width from viewBox if width is not provided
+</ParamField>
+
+<ResponseField name="diagram" type="Diagram">
+  A `Diagram` object containing the rendered SVG with custom gate labels
+</ResponseField>
+
+<Note>
+  This function automatically handles custom gate labels for T gates (tagged as `S[T]` or `S_DAG[T]`) and parametric rotation gates (tagged as `I[R_X(...)]`, `I[R_Y(...)]`, `I[R_Z(...)]`, or `I[U3(...)]`).
+</Note>
+
+#### Example
+
+```python
+import stim
+from tsim.utils.diagram import render_svg
+
+# Create a circuit with custom tagged gates
+circuit = stim.Circuit()
+circuit.append("H", [0])
+circuit.append("S", [0], tag="T")  # Will render as T gate
+circuit.append("I", [1], tag="R_Z(theta=0.5*pi)")  # Will render as R_Z with angle
+
+# Render as timeline diagram
+diagram = render_svg(circuit, "timeline", height=100)
+
+# Display in Jupyter notebook
+diagram
+```
+
+### wrap_svg()
+
+Wrap an SVG string in a scrolling container for better display.
+
+```python
+def wrap_svg(
+    svg: str,
+    *,
+    width: float | None = None,
+    height: float | None = None,
+) -> str
+```
+
+<ParamField path="svg" type="str" required>
+  Raw SVG markup to wrap
+</ParamField>
+
+<ParamField path="width" type="float | None">
+  Explicit width for the container in pixels
+</ParamField>
+
+<ParamField path="height" type="float | None">
+  Desired height in pixels. Used to infer width from SVG viewBox if width is not provided
+</ParamField>
+
+<ResponseField name="wrapped_svg" type="str">
+  SVG wrapped in a scrollable div container, or the original SVG if no dimensions were computed
+</ResponseField>
+
+### tagged_gates_to_placeholder()
+
+Replace tagged gates with I_ERROR placeholder gates for custom rendering.
+
+```python
+def tagged_gates_to_placeholder(
+    circuit: stim.Circuit,
+) -> tuple[stim.Circuit, dict[float, GateLabel]]
+```
+
+<ParamField path="circuit" type="stim.Circuit" required>
+  The Stim circuit containing tagged gates to replace
+</ParamField>
+
+<ResponseField name="modified_circuit" type="stim.Circuit">
+  A copy of the circuit with tagged gates replaced by I_ERROR placeholders
+</ResponseField>
+
+<ResponseField name="placeholder_map" type="dict[float, GateLabel]">
+  Dictionary mapping placeholder identifiers (I_ERROR p-values) to their corresponding gate labels
+</ResponseField>
+
+<Note>
+  This function supports the following tagged gate formats:
+  - `S[T]` and `S_DAG[T]` for T and T† gates
+  - `I[R_X(theta=value*pi)]`, `I[R_Y(theta=value*pi)]`, `I[R_Z(theta=value*pi)]` for rotation gates
+  - `I[U3(theta=t*pi, phi=p*pi, lambda=l*pi)]` for U3 gates
+</Note>
+
+### placeholders_to_t()
+
+Replace I_ERROR placeholder gates in an SVG diagram with actual gate names.
+
+```python
+def placeholders_to_t(
+    svg_string: str,
+    placeholder_id_to_labels: dict[float, GateLabel]
+) -> str
+```
+
+<ParamField path="svg_string" type="str" required>
+  The SVG string from Stim's `diagram()` method containing I_ERROR placeholder gates
+</ParamField>
+
+<ParamField path="placeholder_id_to_labels" type="dict[float, GateLabel]" required>
+  Mapping from placeholder identifiers (I_ERROR p-values) to gate labels
+</ParamField>
+
+<ResponseField name="modified_svg" type="str">
+  SVG string with I_ERROR placeholders replaced by custom gate labels
+</ResponseField>
+
+## Circuit Visualization
+
+The diagram module provides a complete pipeline for rendering quantum circuits with custom gate labels:
+
+1. **Tag gates** in your Stim circuit using the tag parameter (e.g., `S[T]` for T gates)
+2. **Convert to placeholders** using `tagged_gates_to_placeholder()` to replace custom gates with I_ERROR markers
+3. **Generate SVG** using Stim's built-in `diagram()` method
+4. **Replace placeholders** using `placeholders_to_t()` to substitute custom labels
+5. **Wrap for display** using `wrap_svg()` to add scrolling containers
+
+The `render_svg()` function encapsulates this entire pipeline for convenience.

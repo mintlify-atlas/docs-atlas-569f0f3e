@@ -1,0 +1,210 @@
+---
+title: "compile_program()"
+description: "Compile a prepared sampling graph into an executable program"
+---
+
+Defined in `src/tsim/compile/pipeline.py:19`
+
+## Function Signature
+
+```python
+def compile_program(
+    prepared: SamplingGraph,
+    *,
+    mode: DecompositionMode,
+) -> CompiledProgram
+```
+
+Compile a prepared graph into an executable sampling program. This is the main entry point for the second phase of compilation.
+
+## Parameters
+
+<ParamField path="prepared" type="SamplingGraph" required>
+  The prepared graph from `prepare_graph()`. Must be a `SamplingGraph` containing:
+  - A reduced ZX graph with f-parameters
+  - Error transformation matrix
+  - Channel probabilities
+  - Output and detector counts
+</ParamField>
+
+<ParamField path="mode" type="DecompositionMode" required>
+  Decomposition mode for output plugging:
+  
+  **`"sequential"`** - For sampling. Creates circuits for [0, 1, 2, ..., n] outputs plugged.
+  Each measurement is conditioned on previous ones.
+  
+  **`"joint"`** - For probability estimation. Creates circuits for [0, n] outputs only.
+  Computes joint probability efficiently.
+</ParamField>
+
+## Returns
+
+<ResponseField name="CompiledProgram" type="CompiledProgram">
+  A fully compiled program ready for sampling, containing:
+  
+  <ResponseField name="components" type="tuple[CompiledComponent, ...]">
+    Compiled connected components, sorted by number of outputs
+  </ResponseField>
+  
+  <ResponseField name="output_order" type="Array">
+    Reordering array: `final_samples = combined[:, np.argsort(output_order)]`
+  </ResponseField>
+  
+  <ResponseField name="num_outputs" type="int">
+    Total number of outputs across all components
+  </ResponseField>
+  
+  <ResponseField name="num_f_params" type="int">
+    Total number of f-parameters (transformed error parameters)
+  </ResponseField>
+  
+  <ResponseField name="num_detectors" type="int">
+    Number of detector outputs
+  </ResponseField>
+</ResponseField>
+
+## Compilation Stages
+
+The function performs these steps:
+
+### 1. Component Decomposition
+
+```python
+components = connected_components(prepared.graph)
+```
+
+Split the prepared graph into independent connected components. Each component can be sampled separately and has its own set of outputs.
+
+### 2. Parameter Extraction
+
+```python
+f_indices_global = _get_f_indices(prepared.graph)
+```
+
+Extract all f-parameter indices from the graph and sort them numerically. These represent the transformed error parameters.
+
+### 3. Component Compilation
+
+For each connected component:
+
+#### a. Determine Output Plugging
+
+Based on `mode`, create graphs with different numbers of outputs plugged:
+- **Sequential**: [0, 1, 2, ..., n] - one graph per output count
+- **Joint**: [0, n] - only normalization and full joint
+
+#### b. Plug Outputs
+
+Outputs are "plugged" by applying effects:
+- Plugged outputs get X-basis measurements with phase `m_i`
+- Unplugged outputs get Z-basis measurements (implementing a trace)
+
+```python
+effect = "0" * num_plugged + "+" * (num_outputs - num_plugged)
+g.apply_effect(effect)
+```
+
+#### c. Reduce Graphs
+
+Apply ZX calculus reduction with parameter safety:
+
+```python
+zx.full_reduce(g_copy, paramSafe=True)
+g_copy.normalize()
+```
+
+#### d. Normalize Power-of-2 Factors
+
+Balance `power2` scalars across graphs to prevent overflow/underflow:
+
+```python
+if power2_base is None:
+    power2_base = g_copy.scalar.power2
+g_copy.scalar.add_power(-power2_base)
+```
+
+#### e. Remove Parametrized Phase Terms
+
+Clear global phase terms before stabilizer decomposition:
+
+```python
+_remove_phase_terms(g_copy)
+```
+
+#### f. Stabilizer Rank Decomposition
+
+Decompose non-Clifford circuits into sums of Clifford-like terms:
+
+```python
+g_list = find_stab(g_copy)
+```
+
+<Note>
+  Clifford circuits have stabilizer rank 1. The decomposition returns `g_list` with length equal to the stabilizer rank.
+</Note>
+
+#### g. Compile to JAX
+
+Convert scalar graphs to static JAX arrays:
+
+```python
+compiled = compile_scalar_graphs(g_list, param_names)
+```
+
+See `tsim.compile.compile.compile_scalar_graphs` for details.
+
+### 4. Assembly
+
+Combine all compiled components with output reordering:
+
+```python
+return CompiledProgram(
+    components=tuple(compiled_components),
+    output_order=jnp.array(output_order, dtype=jnp.int32),
+    num_outputs=num_outputs,
+    num_f_params=len(f_indices_global),
+    num_detectors=prepared.num_detectors,
+)
+```
+
+## Example Usage
+
+```python
+from tsim.compile.pipeline import compile_program
+from tsim.prepare import prepare_graph
+
+# Prepare a circuit
+prepared = prepare_graph(circuit, noisy_circuit)
+
+# Compile for sampling
+compiled = compile_program(prepared, mode="sequential")
+
+# Compile for probability estimation
+compiled_joint = compile_program(prepared, mode="joint")
+```
+
+## Implementation Notes
+
+<Info>
+  **Component Independence**: Connected components are independent and can theoretically be sampled in parallel, though current implementation processes them sequentially in sorted order (by output count).
+</Info>
+
+<Note>
+  **Parameter Selection**: Each component only uses a subset of the global f-parameters. The `f_selection` array in each `CompiledComponent` maps local parameter indices to global ones.
+</Note>
+
+<Warning>
+  **Power-of-2 Normalization**: The `power2_base` normalization is critical for numerical stability. Without it, scalar factors can overflow or underflow during stabilizer decomposition.
+</Warning>
+
+## Related Types
+
+- `SamplingGraph` - Input type (see `tsim.core.types`)
+- `CompiledProgram` - Return type (see `tsim.core.types`)
+- `CompiledComponent` - Component type (see `tsim.core.types`)
+- `CompiledScalarGraphs` - Low-level compiled representation (see `tsim.compile.compile`)
+
+## See Also
+
+- [evaluate()](/api/compile/evaluate) - Evaluate compiled programs with parameter values
+- [Compilation Overview](/api/compile/overview) - High-level pipeline description

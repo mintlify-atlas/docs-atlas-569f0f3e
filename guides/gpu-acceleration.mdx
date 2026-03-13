@@ -1,0 +1,516 @@
+---
+title: GPU Acceleration
+description: Leverage GPU compute for high-performance quantum circuit simulation
+---
+
+Tsim uses [JAX](https://jax.readthedocs.io/) as its numerical backend, enabling seamless GPU acceleration for quantum circuit simulation. This guide covers how to enable GPU support, optimize performance, and understand when GPU acceleration provides the most benefit.
+
+## Why GPU Acceleration?
+
+GPUs excel at parallel computations, making them ideal for:
+
+- **Batch sampling**: Processing thousands of shots simultaneously
+- **Large circuits**: Evaluating complex probability amplitude graphs
+- **Error correction**: Generating millions of samples for Monte Carlo studies
+
+Tsim's JAX backend automatically parallelizes computations across GPU cores, providing significant speedups for appropriate workloads.
+
+## Installation
+
+### CPU-Only (Default)
+
+The default installation uses JAX with CPU support:
+
+```bash
+pip install bloqade-tsim
+```
+
+This is sufficient for:
+- Small circuits (few qubits)
+- Low shot counts (&lt; 10,000)
+- Development and testing
+
+### With GPU Support
+
+#### CUDA 12.x
+
+For NVIDIA GPUs with CUDA 12.x:
+
+```bash
+pip install "bloqade-tsim[cuda12]"
+```
+
+<Note>
+Requires CUDA 12.x toolkit installed on your system. Verify with `nvcc --version`.
+</Note>
+
+#### CUDA 13.x
+
+For systems with CUDA 13.x:
+
+```bash
+pip install "bloqade-tsim[cuda13]"
+```
+
+<Warning>
+CUDA 13.x support requires JAX 0.6.0 or later. This is the recommended option for newer GPU systems.
+</Warning>
+
+### Using uv Package Manager
+
+With [uv](https://docs.astral.sh/uv/):
+
+```bash
+# CPU only
+uv add bloqade-tsim
+
+# With CUDA 12
+uv add "bloqade-tsim[cuda12]"
+
+# With CUDA 13  
+uv add "bloqade-tsim[cuda13]"
+```
+
+## Verifying GPU Access
+
+Check if JAX can see your GPU:
+
+```python
+import jax
+
+# List available devices
+print(f"Devices: {jax.devices()}")
+
+# Check default device
+print(f"Default device: {jax.default_backend()}")
+```
+
+Expected output with GPU:
+```
+Devices: [cuda:0]
+Default device: cuda
+```
+
+Expected output without GPU:
+```
+Devices: [cpu:0]
+Default device: cpu
+```
+
+<Info>
+If JAX defaults to CPU despite GPU installation, check your CUDA installation and driver compatibility.
+</Info>
+
+## Performance Optimization
+
+### Batch Size Tuning
+
+The `batch_size` parameter controls how many samples are processed in parallel:
+
+```python
+import tsim
+import time
+
+circuit = tsim.Circuit('''
+    H 0 1 2 3 4
+    T 0 1 2
+    CNOT 0 1 1 2 2 3 3 4
+    M 0 1 2 3 4
+''')
+
+sampler = circuit.compile_sampler(seed=0)
+
+# Compare different batch sizes
+for batch_size in [512, 1024, 2048, 4096, 8192]:
+    start = time.time()
+    samples = sampler.sample(shots=100000, batch_size=batch_size)
+    elapsed = time.time() - start
+    throughput = 100000 / elapsed
+    print(f"batch_size={batch_size}: {throughput:.0f} shots/sec")
+```
+
+<Tip>
+**Finding optimal batch size:**
+
+1. Start with default (1024)
+2. Double until performance stops improving
+3. If you hit memory errors, reduce by 25-50%
+4. Optimal size typically: 2048-8192 for GPUs, 512-1024 for CPUs
+</Tip>
+
+### GPU Memory Management
+
+Monitor GPU memory usage to maximize batch size:
+
+<Tabs>
+<Tab title="NVIDIA-SMI">
+```bash
+# Watch GPU memory in real-time
+watch -n 0.1 nvidia-smi
+```
+
+Look for:
+- **Memory-Usage**: Should be near maximum when sampling
+- **GPU-Util**: Should be high (70-100%) during sampling
+</Tab>
+
+<Tab title="Python Monitoring">
+```python
+import jax
+import tsim
+
+# Get memory stats before sampling
+mem_before = jax.devices()[0].memory_stats()['bytes_in_use']
+
+sampler = circuit.compile_sampler(seed=0)
+samples = sampler.sample(shots=100000, batch_size=4096)
+
+# Get memory stats after
+mem_after = jax.devices()[0].memory_stats()['bytes_in_use']
+
+mem_used_mb = (mem_after - mem_before) / 1024**2
+print(f"Memory used: {mem_used_mb:.1f} MB")
+```
+</Tab>
+
+<Tab title="Profiling Script">
+```python
+def profile_batch_sizes(circuit, shot_counts, batch_sizes):
+    """Profile different batch sizes to find optimal."""
+    import time
+    import numpy as np
+    
+    results = []
+    sampler = circuit.compile_sampler(seed=0)
+    
+    for shots in shot_counts:
+        for batch_size in batch_sizes:
+            try:
+                start = time.time()
+                _ = sampler.sample(shots=shots, batch_size=batch_size)
+                elapsed = time.time() - start
+                
+                throughput = shots / elapsed
+                results.append({
+                    'shots': shots,
+                    'batch_size': batch_size,
+                    'throughput': throughput,
+                    'time': elapsed
+                })
+                print(f"shots={shots}, batch={batch_size}: "
+                      f"{throughput:.0f} shots/sec")
+            except RuntimeError as e:
+                print(f"shots={shots}, batch={batch_size}: "
+                      f"FAILED ({e})")
+    
+    return results
+
+# Example usage
+circuit = tsim.Circuit.generated_surface_code(distance=3)
+results = profile_batch_sizes(
+    circuit,
+    shot_counts=[10000, 100000],
+    batch_sizes=[512, 1024, 2048, 4096, 8192]
+)
+```
+</Tab>
+</Tabs>
+
+### JIT Compilation
+
+JAX uses Just-In-Time (JIT) compilation. The first `sample()` call will be slower:
+
+```python
+sampler = circuit.compile_sampler(seed=0)
+
+# First call: JIT compilation + execution (slow)
+samples1 = sampler.sample(shots=1000, batch_size=1024)
+
+# Subsequent calls: cached compiled code (fast)
+samples2 = sampler.sample(shots=1000, batch_size=1024)
+samples3 = sampler.sample(shots=1000, batch_size=1024)
+```
+
+<Note>
+If you change `batch_size`, JAX will recompile. For profiling, keep batch size constant after warmup.
+</Note>
+
+## When GPU Helps Most
+
+### High Shot Counts
+
+GPU speedup increases with shot count:
+
+<CodeGroup>
+```python Small (CPU Fine)
+# 1,000 shots - CPU may be faster due to overhead
+sampler = circuit.compile_sampler()
+samples = sampler.sample(shots=1000)
+```
+
+```python Medium (GPU Starts Helping)
+# 10,000 shots - GPU starts showing benefit
+sampler = circuit.compile_sampler()
+samples = sampler.sample(shots=10000, batch_size=2048)
+```
+
+```python Large (GPU Shines)
+# 1,000,000 shots - GPU provides major speedup
+sampler = circuit.compile_sampler()
+samples = sampler.sample(shots=1000000, batch_size=8192)
+```
+</CodeGroup>
+
+### Complex Circuits
+
+GPU acceleration benefits increase with:
+- **More T gates**: Higher stabilizer rank
+- **More qubits**: Larger state space
+- **Deeper circuits**: More operations to parallelize
+
+```python
+# Simple circuit - GPU overhead may dominate
+simple = tsim.Circuit('''
+    H 0
+    CNOT 0 1
+    M 0 1
+''')
+
+# Complex circuit - GPU acceleration significant
+complex = tsim.Circuit('''
+    H 0 1 2 3 4 5 6 7
+    T 0 1 2 3 4 5 6 7
+    CNOT 0 1 1 2 2 3 3 4 4 5 5 6 6 7
+    T 0 1 2 3 4 5 6 7
+    M 0 1 2 3 4 5 6 7
+''')
+
+# GPU speedup much larger for complex circuit
+```
+
+### Noisy Circuits
+
+Circuits with many noise channels benefit from GPU parallelization:
+
+```python
+import stim
+import tsim
+
+# Generate noisy surface code
+stim_circuit = stim.Circuit.generated(
+    "surface_code:rotated_memory_z",
+    distance=5,  # Larger code
+    rounds=10,   # More rounds
+    after_clifford_depolarization=0.001,
+    before_measure_flip_probability=0.001
+)
+
+circuit = tsim.Circuit.from_stim_program(stim_circuit)
+sampler = circuit.compile_detector_sampler(seed=0)
+
+# GPU handles noise sampling efficiently
+detections, observables = sampler.sample(
+    shots=1000000,
+    batch_size=8192,
+    separate_observables=True
+)
+```
+
+## Benchmarking Example
+
+Complete benchmarking script:
+
+```python
+import time
+import numpy as np
+import jax
+import tsim
+
+def benchmark_circuit(circuit, shots=100000, batch_sizes=None):
+    """Benchmark a circuit with different batch sizes."""
+    if batch_sizes is None:
+        batch_sizes = [512, 1024, 2048, 4096, 8192]
+    
+    device = jax.default_backend()
+    print(f"Running on: {device}")
+    print(f"Circuit: {circuit.num_qubits} qubits, "
+          f"{circuit.tcount()} T gates, "
+          f"{circuit.num_measurements} measurements\n")
+    
+    sampler = circuit.compile_sampler(seed=0)
+    
+    # Warmup
+    _ = sampler.sample(shots=100, batch_size=batch_sizes[0])
+    
+    results = []
+    for batch_size in batch_sizes:
+        # Run multiple times for stable measurement
+        times = []
+        for _ in range(3):
+            start = time.time()
+            _ = sampler.sample(shots=shots, batch_size=batch_size)
+            elapsed = time.time() - start
+            times.append(elapsed)
+        
+        avg_time = np.mean(times)
+        std_time = np.std(times)
+        throughput = shots / avg_time
+        
+        results.append({
+            'batch_size': batch_size,
+            'time': avg_time,
+            'std': std_time,
+            'throughput': throughput
+        })
+        
+        print(f"batch_size={batch_size:5d}: "
+              f"{throughput:10.0f} shots/sec "
+              f"(time: {avg_time:.3f}s ± {std_time:.3f}s)")
+    
+    # Find optimal
+    best = max(results, key=lambda x: x['throughput'])
+    print(f"\nOptimal batch_size: {best['batch_size']} "
+          f"({best['throughput']:.0f} shots/sec)")
+    
+    return results
+
+# Example: benchmark surface code
+circuit = tsim.Circuit.from_stim_program(
+    stim.Circuit.generated(
+        "surface_code:rotated_memory_z",
+        distance=3,
+        rounds=3,
+        after_clifford_depolarization=0.001
+    )
+)
+
+results = benchmark_circuit(circuit, shots=100000)
+```
+
+## Common Issues
+
+### Out of Memory Errors
+
+```python
+# Error: JAX out of memory
+RuntimeError: RESOURCE_EXHAUSTED: Out of memory while trying to allocate...
+```
+
+**Solution**: Reduce batch size
+
+```python
+# Instead of:
+samples = sampler.sample(shots=1000000, batch_size=16384)
+
+# Try:
+samples = sampler.sample(shots=1000000, batch_size=4096)
+```
+
+### Slow First Sample
+
+```python
+# First call is slow
+samples = sampler.sample(1000)  # 5 seconds
+
+# Subsequent calls are fast
+samples = sampler.sample(1000)  # 0.1 seconds
+```
+
+**Explanation**: JAX JIT-compiles on first call. This is expected behavior.
+
+**Solution**: Add warmup if timing matters:
+
+```python
+# Warmup
+_ = sampler.sample(100, batch_size=batch_size)
+
+# Now time actual sampling
+start = time.time()
+samples = sampler.sample(100000, batch_size=batch_size)
+elapsed = time.time() - start
+```
+
+### GPU Not Being Used
+
+Check JAX installation:
+
+```python
+import jax
+print(jax.devices())
+
+# If shows [cpu:0], reinstall with GPU support
+# pip install --upgrade "jax[cuda12]"
+```
+
+## Performance Guidelines
+
+<Steps>
+
+### Use GPU for large-scale sampling
+
+- **Shots &gt; 10,000**: GPU beneficial
+- **Shots &gt; 100,000**: GPU highly recommended
+- **Shots &gt; 1,000,000**: GPU essential
+
+### Tune batch size to hardware
+
+- **GPU**: 2048-8192 typically optimal
+- **CPU**: 512-1024 typically optimal
+- **High memory GPU**: Try up to 16384
+
+### Profile before production runs
+
+```python
+# Profile with small sample
+results = benchmark_circuit(circuit, shots=10000)
+optimal_batch = max(results, key=lambda x: x['throughput'])['batch_size']
+
+# Use optimal batch for production
+samples = sampler.sample(shots=10000000, batch_size=optimal_batch)
+```
+
+### Consider compilation overhead
+
+For many small sampling calls, CPU might be faster due to GPU overhead. Use GPU when:
+- Making few large `sample()` calls
+- Total shots &gt; 100,000
+- Circuit complexity is high
+
+</Steps>
+
+## Best Practices
+
+```python
+import tsim
+import jax
+
+# 1. Check device availability
+print(f"Using device: {jax.default_backend()}")
+
+# 2. Compile sampler once
+sampler = circuit.compile_detector_sampler(seed=0)
+
+# 3. Warmup for accurate timing
+_ = sampler.sample(shots=100, batch_size=4096)
+
+# 4. Use optimal batch size for your hardware
+# (find via profiling)
+optimal_batch_size = 4096
+
+# 5. Generate large batches
+samples = sampler.sample(
+    shots=1000000,
+    batch_size=optimal_batch_size
+)
+
+# 6. Monitor memory usage
+if jax.default_backend() == 'gpu':
+    mem_info = jax.devices()[0].memory_stats()
+    print(f"Memory used: {mem_info['bytes_in_use'] / 1e9:.2f} GB")
+```
+
+## Next Steps
+
+- Learn about [sampling strategies](/guides/sampling) for optimal performance
+- Explore [noise channels](/guides/noise-channels) for realistic simulations
+- See [circuit construction](/guides/circuit-construction) for building efficient circuits

@@ -1,97 +1,84 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "tsim"
+description: "GPU-accelerated quantum circuit sampler via ZX-calculus stabilizer rank decomposition"
 ---
 
-## Setting up
+<div className="bg-gradient-to-r from-[#b21e1e] to-[#e59f82] text-white py-16 px-8 rounded-lg mb-8">
+  <h1 className="text-5xl font-bold mb-4">tsim</h1>
+  <p className="text-2xl mb-8">Universal quantum circuit sampling with ZX-calculus stabilizer rank decomposition</p>
+  <div className="flex gap-4">
+    <a href="/quickstart" className="bg-white text-[#b21e1e] px-6 py-3 rounded-md font-semibold hover:bg-gray-100">
+      Get Started
+    </a>
+    <a href="https://github.com/QuEraComputing/tsim" className="bg-transparent border-2 border-white text-white px-6 py-3 rounded-md font-semibold hover:bg-white/10">
+      View on GitHub
+    </a>
+  </div>
+</div>
 
-Get your documentation site up and running in minutes.
+## What is tsim?
 
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
+tsim is a GPU-accelerated quantum circuit simulator that supports fast sampling from Clifford+T circuits with Pauli noise. It uses stabilizer rank decomposition together with ZX-calculus simplification rules to efficiently simulate hundreds of qubits, as long as the circuit doesn't have too many non-Clifford instructions.
 
-## Make it yours
+tsim feels just like [Stim](https://github.com/quantumlib/Stim), but supports non-Clifford gates including `T`, `T_DAG`, `R_X`, `R_Y`, `R_Z`, and `U3`.
 
-Design a docs site that looks great and empowers your users.
+## Key Features
 
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Extended Gate Support" icon="atom">
+    Supports all Stim gates plus non-Clifford gates (T, T_DAG, R_X, R_Y, R_Z, U3)
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="GPU Acceleration" icon="microchip">
+    GPU-accelerated sampling via JAX for high-performance computation
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="ZX-Calculus" icon="diagram-project">
+    Advanced ZX-calculus simplification and stabilizer rank decomposition
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="Noise Channels" icon="wave-square">
+    Built-in Pauli noise channel support for realistic quantum simulations
   </Card>
-</Columns>
+  <Card title="Detector Sampling" icon="chart-line">
+    Detector and measurement sampling for quantum error correction
+  </Card>
+  <Card title="Drop-in Replacement" icon="arrow-right-arrow-left">
+    Drop-in replacement for Stim with extended gate support
+  </Card>
+</CardGroup>
 
-## Create beautiful pages
+## Quick Example
 
-Everything you need to create world-class documentation.
+```python
+import tsim
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+c = tsim.Circuit("""
+    RX 0
+    R 1
+    T 0
+    PAULI_CHANNEL_1(0.1, 0.1, 0.2) 0 1
+    H 0
+    CNOT 0 1
+    DEPOLARIZE2(0.01) 0 1
+    M 0 1
+    DETECTOR rec[-1] rec[-2]
+""")
 
-## Need inspiration?
+detector_sampler = c.compile_detector_sampler()
+samples = detector_sampler.sample(shots=100)
+```
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+## Get Started
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Install tsim with pip or uv, including GPU support
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get up and running with tsim in minutes
+  </Card>
+  <Card title="Core Concepts" icon="book" href="/concepts/overview">
+    Learn about ZX-calculus and stabilizer rank decomposition
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/circuit">
+    Explore the complete API documentation
+  </Card>
+</CardGroup>

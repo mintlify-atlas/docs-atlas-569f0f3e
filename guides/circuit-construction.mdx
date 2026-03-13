@@ -1,0 +1,393 @@
+---
+title: Circuit Construction
+description: Learn how to create and manipulate quantum circuits in tsim
+---
+
+Tsim provides a flexible `Circuit` class that acts as a wrapper around Stim's circuit format while adding support for non-Clifford gates. This guide covers the fundamentals of building and manipulating quantum circuits.
+
+## Creating Circuits
+
+### From Program Text
+
+The most common way to create a circuit is from Stim-compatible program text:
+
+```python
+import tsim
+
+circuit = Circuit('''
+    H 0
+    T 0
+    CNOT 0 1
+    M 0 1
+''')
+```
+
+You can also create an empty circuit and build it incrementally:
+
+```python
+circuit = Circuit()  # Empty circuit
+```
+
+### From Stim Circuits
+
+Convert existing Stim circuits to tsim circuits:
+
+```python
+import stim
+import tsim
+
+stim_circ = stim.Circuit("H 0\nCNOT 0 1\nM 0 1")
+circuit = tsim.Circuit.from_stim_program(stim_circ)
+```
+
+### From Files
+
+Load circuits from file:
+
+```python
+circuit = Circuit.from_file("my_circuit.stim")
+```
+
+<Note>
+Files can use tsim's shorthand syntax for non-Clifford gates like `T`, `T_DAG`, and rotation gates.
+</Note>
+
+## Adding Gates
+
+### Using append()
+
+The `append()` method adds operations to your circuit:
+
+<CodeGroup>
+```python Single Qubit Gates
+circuit = Circuit()
+
+# Clifford gates
+circuit.append("H", 0)
+circuit.append("X", [1, 2])  # Apply to multiple qubits
+
+# Non-Clifford gates
+circuit.append("T", 0)
+circuit.append("T_DAG", 1)
+```
+
+```python Two Qubit Gates
+circuit = Circuit()
+
+# CNOT gate
+circuit.append("CNOT", [0, 1])
+
+# CZ gate  
+circuit.append("CZ", [2, 3])
+
+# SWAP gate
+circuit.append("SWAP", [0, 1])
+```
+
+```python Parametric Gates
+circuit = Circuit()
+
+# Rotation gates (angle as multiple of π)
+circuit.append("R_Z", 0, arg=0.25)  # Rotate by π/4
+circuit.append("R_X", 1, arg=0.5)   # Rotate by π/2
+circuit.append("R_Y", 2, arg=1.0)   # Rotate by π
+
+# U3 gate (theta, phi, lambda as multiples of π)
+circuit.append("U3", 0, arg=(0.5, 0.25, 0.125))
+```
+
+```python Measurements
+circuit = Circuit()
+
+# Measure qubits
+circuit.append("M", [0, 1, 2])
+
+# Measure and reset
+circuit.append("MR", [0, 1])
+```
+</CodeGroup>
+
+<Warning>
+For rotation gates and U3, angles are specified as **multiples of π**, not radians. For example, `R_Z(0.5)` rotates by π/2, not 0.5 radians.
+</Warning>
+
+### Using append_from_stim_program_text()
+
+Add multiple operations from program text:
+
+```python
+circuit = Circuit("H 0")
+circuit.append_from_stim_program_text('''
+    CNOT 0 1
+    T 0
+    M 0 1
+''')
+```
+
+## Gate Types
+
+### Clifford Gates
+
+Standard single-qubit Clifford gates:
+
+```python
+# Pauli gates
+circuit.append("I", 0)  # Identity
+circuit.append("X", 0)  # Pauli X
+circuit.append("Y", 0)  # Pauli Y  
+circuit.append("Z", 0)  # Pauli Z
+
+# Hadamard
+circuit.append("H", 0)
+
+# Phase gates
+circuit.append("S", 0)      # Phase gate (π/2 rotation)
+circuit.append("S_DAG", 0)  # Inverse phase gate
+
+# Square root gates
+circuit.append("SQRT_X", 0)
+circuit.append("SQRT_Y", 0)
+circuit.append("SQRT_Z", 0)
+```
+
+Two-qubit Clifford gates:
+
+```python
+# Controlled gates
+circuit.append("CNOT", [0, 1])  # Also available as CX
+circuit.append("CY", [0, 1])
+circuit.append("CZ", [0, 1])
+
+# Swap variants
+circuit.append("SWAP", [0, 1])
+circuit.append("ISWAP", [0, 1])
+```
+
+### Non-Clifford Gates
+
+T gates (π/4 phase rotation):
+
+```python
+circuit = Circuit('''
+    T 0      # T gate
+    T_DAG 1  # T dagger (inverse)
+''')
+```
+
+<Info>
+Internally, tsim represents T gates using tags on Clifford S gates. The shorthand `T 0` is equivalent to `S[T] 0`.
+</Info>
+
+Arbitrary rotation gates:
+
+```python
+circuit = Circuit('''
+    R_X(0.25) 0   # Rotate around X by π/4
+    R_Y(0.5) 1    # Rotate around Y by π/2
+    R_Z(1.0) 2    # Rotate around Z by π
+''')
+```
+
+General single-qubit unitary (U3):
+
+```python
+circuit = Circuit('''
+    U3(0.5, 0.25, 0.125) 0
+''')
+```
+
+The U3 gate implements:
+
+$$
+U_3(\theta, \phi, \lambda) =
+\begin{pmatrix}
+\cos(\theta\pi/2) & -e^{i\lambda\pi}\sin(\theta\pi/2) \\\\
+e^{i\phi\pi}\sin(\theta\pi/2) & e^{i(\phi+\lambda)\pi}\cos(\theta\pi/2)
+\end{pmatrix}
+$$
+
+## Circuit Manipulation
+
+### Combining Circuits
+
+Add circuits together:
+
+```python
+circuit1 = Circuit("H 0")
+circuit2 = Circuit("CNOT 0 1")
+
+# Concatenate
+circuit3 = circuit1 + circuit2
+
+# In-place concatenation
+circuit1 += circuit2
+```
+
+### Repeating Circuits
+
+Multiply circuits to repeat them:
+
+```python
+circuit = Circuit("H 0\nX 1")
+
+# Repeat 3 times
+repeated = circuit * 3
+
+# In-place repetition
+circuit *= 3
+```
+
+<Note>
+Circuit repetition creates a `REPEAT` block for efficiency rather than flattening all operations.
+</Note>
+
+### Copying Circuits
+
+```python
+circuit1 = Circuit("H 0\nCNOT 0 1")
+circuit2 = circuit1.copy()  # Independent copy
+```
+
+### Slicing and Indexing
+
+Access individual instructions or slices:
+
+```python
+circuit = Circuit("H 0\nX 1\nCNOT 0 1\nM 0 1")
+
+# Get single instruction
+first_gate = circuit[0]  # H 0
+last_gate = circuit[-1]  # M 0 1
+
+# Get slice (returns new Circuit)
+subcircuit = circuit[1:3]  # X 1 and CNOT 0 1
+```
+
+### Removing Operations
+
+```python
+circuit = Circuit("H 0\nX 1\nCNOT 0 1")
+
+# Remove last instruction
+last = circuit.pop()
+
+# Remove specific index
+gate = circuit.pop(0)
+```
+
+## Circuit Properties
+
+### Counting Elements
+
+```python
+circuit = Circuit('''
+    H 0 1 2
+    T 0
+    CNOT 0 1 1 2
+    M 0 1 2
+    DETECTOR rec[-1] rec[-2]
+    OBSERVABLE_INCLUDE(0) rec[-3]
+''')
+
+print(f"Instructions: {len(circuit)}")           # 5
+print(f"Qubits: {circuit.num_qubits}")          # 3
+print(f"Measurements: {circuit.num_measurements}") # 3
+print(f"Detectors: {circuit.num_detectors}")    # 1
+print(f"Observables: {circuit.num_observables}") # 1
+print(f"T gates: {circuit.tcount()}")           # 1
+```
+
+### Removing Noise and Annotations
+
+```python
+# Remove all noise operations
+clean_circuit = circuit.without_noise()
+
+# Remove DETECTOR and OBSERVABLE_INCLUDE
+bare_circuit = circuit.without_annotations()
+```
+
+## Working with Repeat Blocks
+
+Tsim preserves Stim's `REPEAT` blocks for efficiency:
+
+```python
+import stim
+
+circuit = Circuit("H 0")
+
+# Add a repeat block
+block = stim.CircuitRepeatBlock(5, stim.Circuit("CNOT 0 1\nTICK"))
+circuit.append(block)
+
+# Flatten to expand all repeats
+flattened = circuit.flattened()
+```
+
+## String Representations
+
+```python
+circuit = Circuit("H 0\nCNOT 0 1")
+
+# Program text format
+print(str(circuit))
+# Output:
+# H 0
+# CX 0 1
+
+# Python-style repr
+print(repr(circuit))
+# Output: tsim.Circuit('''
+# H 0
+# CX 0 1
+# ''')
+```
+
+## Best Practices
+
+<Steps>
+
+### Start with program text for readability
+
+Use multi-line strings to define circuits when the structure is known upfront:
+
+```python
+circuit = Circuit('''
+    # Initialize
+    R 0 1 2
+    
+    # Entangle
+    H 0
+    CNOT 0 1 1 2
+    
+    # Measure
+    M 0 1 2
+''')
+```
+
+### Use append() for dynamic construction
+
+When building circuits programmatically, use `append()`:
+
+```python
+circuit = Circuit()
+for i in range(n_qubits):
+    circuit.append("H", i)
+```
+
+### Validate with properties
+
+Check circuit properties to ensure correctness:
+
+```python
+assert circuit.num_qubits == expected_qubits
+assert circuit.num_measurements == expected_measurements
+```
+
+</Steps>
+
+## Next Steps
+
+- Learn about [sampling from circuits](/guides/sampling)
+- Explore [non-Clifford gates](/guides/non-clifford-gates) in detail
+- Add [noise channels](/guides/noise-channels) to your circuits

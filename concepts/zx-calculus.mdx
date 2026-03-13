@@ -1,0 +1,223 @@
+---
+title: "ZX-Calculus"
+description: "Understanding the graphical language that powers tsim's circuit simplifications"
+---
+
+## What is ZX-Calculus?
+
+ZX-calculus is a graphical language for reasoning about quantum computations. Instead of representing quantum operations as matrices or circuits, ZX-calculus uses diagrams with colored nodes (called "spiders") connected by wires.
+
+<Info>
+Think of ZX-calculus as a "visual algebra" for quantum computing. Just as algebraic expressions can be simplified using rules like x + 0 = x or x × 1 = x, ZX diagrams can be simplified using graphical rewrite rules.
+</Info>
+
+The two fundamental elements in ZX-calculus are:
+
+- **Z-spiders** (green nodes): Represent operations in the computational (Z) basis
+- **X-spiders** (red nodes): Represent operations in the X basis
+- **Hadamard gates** (yellow boxes or special edges): Convert between Z and X bases
+
+## Why Use ZX-Calculus for Simulation?
+
+ZX-calculus provides several advantages for quantum circuit simulation:
+
+### 1. Powerful Simplification Rules
+
+ZX-calculus has rewrite rules that can simplify circuits in ways that traditional circuit representations cannot:
+
+```python
+import tsim
+
+# Circuit with canceling operations
+c = tsim.Circuit("""
+    T 0
+    T_DAG 0
+    H 0
+    H 0
+""")
+```
+
+In ZX-calculus, these operations can be automatically simplified away, reducing the simulation cost to zero.
+
+<Tip>
+ZX-calculus is **complete for quantum mechanics**: any quantum operation can be represented, and any two representations of the same operation can be transformed into each other using only the rewrite rules.
+</Tip>
+
+### 2. Natural Representation of Stabilizer Operations
+
+Clifford gates and stabilizer states have particularly simple representations in ZX-calculus. A stabilizer state is represented by a graph with only π/2 phases, making it easy to identify and manipulate.
+
+### 3. Unified Handling of Noise
+
+Pauli noise channels fit naturally into ZX diagrams as parametrized spiders. This allows tsim to:
+
+- Track noise propagation through the circuit
+- Simplify noisy circuits using the same rules as noiseless ones
+- Compile noise and gates into a single unified representation
+
+## Key ZX-Calculus Rules
+
+Here are some of the most important rewrite rules that tsim uses:
+
+<Accordion title="Spider Fusion">
+Two spiders of the same color connected by a wire can be merged into a single spider with the sum of their phases:
+
+```
+Z(α) -- Z(β)  =  Z(α + β)
+```
+
+This is one of the most frequently used rules and helps reduce the number of operations in a circuit.
+</Accordion>
+
+<Accordion title="Identity Removal">
+A spider with phase 0 and two legs is equivalent to a wire:
+
+```
+Z(0) with 2 legs  =  wire
+```
+
+This rule removes identity operations that don't affect the quantum state.
+</Accordion>
+
+<Accordion title="π-Copy Rule">
+A Z-spider with phase π and n legs acts as a "copy" operation:
+
+```
+Z(π) with n legs  =  (classical XOR / fan-out)
+```
+
+This is crucial for understanding how measurements and CNOT gates work in ZX-calculus.
+</Accordion>
+
+<Accordion title="Color Change">
+Surrounding a spider with Hadamard gates changes its color:
+
+```
+H -- Z(α) -- H  =  X(α)
+```
+
+This captures the relationship between X and Z basis operations.
+</Accordion>
+
+<Accordion title="Hopf Rule">
+A certain configuration of Z and X spiders can be eliminated completely:
+
+```
+Z(α) connected to X(β) in a specific pattern  =  simpler graph
+```
+
+This is one of the most powerful rules and can dramatically simplify certain circuits.
+</Accordion>
+
+## How tsim Uses ZX-Calculus
+
+tsim's compilation pipeline makes extensive use of ZX-calculus:
+
+<Steps>
+  <Step title="Parse to ZX diagram">
+    Each gate in the circuit is converted to its ZX representation. For example:
+    - CNOT becomes two Z-spiders connected by a wire
+    - H becomes a Hadamard gate (yellow box)
+    - T becomes a Z-spider with phase π/4
+  </Step>
+  
+  <Step title="Apply simplification rules">
+    tsim calls `pyzx.full_reduce()` to apply all available simplification rules. This is done with `paramSafe=True` to preserve parametrized phases from noise channels.
+  </Step>
+  
+  <Step title="Check for zero amplitude">
+    After simplification, tsim checks if `g.scalar.is_zero`. If true, this entire branch of the stabilizer decomposition can be discarded.
+  </Step>
+  
+  <Step title="Decompose non-Clifford components">
+    Remaining non-Clifford phases are decomposed using magic state injection or other stabilizer rank decomposition techniques.
+  </Step>
+</Steps>
+
+## Example: Circuit Simplification
+
+Let's see how ZX-calculus simplifies a real circuit:
+
+```python
+import tsim
+
+# Circuit with potential for simplification
+c = tsim.Circuit("""
+    H 0
+    T 0
+    H 0
+    S 0
+    H 0
+    T_DAG 0
+    H 0
+""")
+
+# View as ZX diagram
+c.diagram("pyzx")
+```
+
+In this circuit:
+- The H gates convert between Z and X spiders
+- The T and T_DAG operations might partially cancel
+- The S gate (phase π/2) combines with other phases
+
+After ZX simplification, this circuit may have significantly fewer effective non-Clifford gates than it appears.
+
+<Note>
+You can visualize ZX diagrams using `circuit.diagram("pyzx")` to see how your circuit is represented internally. This can provide insights into where simplifications occur.
+</Note>
+
+## ZX-Calculus vs. Traditional Circuit Optimization
+
+Traditional circuit optimizers work by:
+- Pattern matching on gate sequences
+- Applying known equivalences (like T T† = I)
+- Reordering commuting gates
+
+ZX-calculus optimizers work differently:
+- Apply local rewrite rules on the graph
+- Exploit topological properties of the diagram
+- Find simplifications that aren't obvious at the circuit level
+
+<Warning>
+ZX simplification is **undecidable** in general—there's no algorithm that can always find the optimal simplification. However, `pyzx.full_reduce()` uses heuristics that work well in practice.
+</Warning>
+
+## Parametrized ZX Diagrams
+
+tsim extends standard ZX-calculus with **parametrized phases**. This allows representing:
+
+- **Noise parameters**: A DEPOLARIZE1(p) gate becomes a spider with phase depending on a parameter p
+- **Multiple error paths**: Different branches of the stabilizer decomposition share the same parametrized diagram
+- **Efficient sampling**: Parameters are substituted only at sample time, avoiding recompilation
+
+The compiled circuit contains:
+- **Constant phases**: Fixed multiples of π/4
+- **Parameter bits**: Binary indicators of which noise events occurred
+- **Evaluation logic**: JAX code to compute amplitudes for each parameter assignment
+
+## Learning More
+
+ZX-calculus has a rich theory and many applications beyond circuit simulation:
+
+- **Measurement-based quantum computing**: Natural representation in ZX
+- **Quantum error correction**: Stabilizer codes are ZX graphs
+- **Quantum protocols**: Teleportation, entanglement swapping, etc.
+
+For tsim users, you don't need to be a ZX expert—the library handles the details. But understanding the basics helps you:
+
+- Predict which circuits will simulate efficiently
+- Design circuits that benefit from simplification
+- Debug compilation issues by visualizing ZX diagrams
+
+## References
+
+- [pyzx documentation](https://github.com/zxcalc/pyzx) - The Python library tsim uses for ZX manipulations
+- [ZX-calculus tutorial](https://zxcalculus.com/) - Interactive introduction to ZX diagrams
+- [Sutcliffe and Kissinger (2025)](https://arxiv.org/abs/2403.06777) - The paper describing tsim's approach
+
+## Next Steps
+
+- Learn how [stabilizer rank decomposition](/concepts/stabilizer-rank) works
+- See [how tsim differs from Stim](/concepts/from-stim-to-tsim)
+- Try the [encoding tutorial](/tutorials/encoding-demo) to see ZX-calculus in action

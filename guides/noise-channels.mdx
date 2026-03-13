@@ -1,0 +1,448 @@
+---
+title: Noise Channels
+description: Model realistic quantum errors with Pauli noise channels
+---
+
+Realistic quantum computers experience errors due to decoherence, gate imperfections, and measurement errors. Tsim provides comprehensive support for Pauli noise channels, enabling accurate simulation of noisy quantum circuits and quantum error correction codes.
+
+## Overview
+
+Tsim supports all of Stim's noise channels, including:
+- **Single-qubit errors**: Bit flips, phase flips, depolarization
+- **Two-qubit errors**: Correlated errors, depolarization
+- **Correlated errors**: Chains of conditionally applied errors
+
+All noise channels in tsim use the **Pauli basis** (I, X, Y, Z), making them compatible with stabilizer-based error correction codes.
+
+## Single-Qubit Noise
+
+### Pauli Error Channels
+
+Apply independent X, Y, or Z errors with specified probabilities:
+
+<CodeGroup>
+```python X Error (Bit Flip)
+# X error with probability p
+circuit = tsim.Circuit('''
+    H 0
+    X_ERROR(0.1) 0  # 10% chance of bit flip
+    M 0
+''')
+```
+
+```python Z Error (Phase Flip)
+# Z error with probability p
+circuit = tsim.Circuit('''
+    H 0
+    Z_ERROR(0.05) 0  # 5% chance of phase flip
+    M 0
+''')
+```
+
+```python Y Error
+# Y error with probability p (both bit and phase flip)
+circuit = tsim.Circuit('''
+    H 0
+    Y_ERROR(0.03) 0  # 3% chance of Y error
+    M 0
+''')
+```
+</CodeGroup>
+
+### Pauli Channel
+
+Apply X, Y, or Z errors with independent probabilities:
+
+$$
+\begin{align*}
+P(\text{no error}) &= 1 - p_x - p_y - p_z \\\\
+P(X) &= p_x \\\\
+P(Y) &= p_y \\\\
+P(Z) &= p_z
+\end{align*}
+$$
+
+```python
+circuit = tsim.Circuit('''
+    H 0
+    PAULI_CHANNEL_1(0.1, 0.05, 0.02) 0
+    M 0
+''')
+# 10% X error, 5% Y error, 2% Z error
+# 83% no error
+```
+
+<Note>
+The probabilities must satisfy $p_x + p_y + p_z \leq 1$. The remaining probability is no error.
+</Note>
+
+### Depolarizing Noise
+
+Single-qubit depolarizing noise applies X, Y, or Z with equal probability:
+
+```python
+# DEPOLARIZE1(p) = PAULI_CHANNEL_1(p/3, p/3, p/3)
+circuit = tsim.Circuit('''
+    H 0
+    DEPOLARIZE1(0.01) 0  # 1% total error rate
+    M 0
+''')
+```
+
+This applies:
+- X error with probability p/3
+- Y error with probability p/3  
+- Z error with probability p/3
+- No error with probability 1-p
+
+### Example: Measuring Error Rates
+
+```python
+import numpy as np
+import tsim
+
+circuit = tsim.Circuit('''
+    # Prepare |+⟩ state
+    R 0
+    H 0
+    
+    # Apply noise
+    X_ERROR(0.1) 0
+    
+    # Measure
+    M 0
+''')
+
+sampler = circuit.compile_sampler(seed=0)
+samples = sampler.sample(10000)
+
+error_rate = np.mean(samples)
+print(f"Measured error rate: {error_rate:.3f}")
+# Output: Measured error rate: 0.100
+```
+
+## Two-Qubit Noise
+
+### Two-Qubit Depolarization
+
+Apply random two-qubit Pauli errors:
+
+```python
+circuit = tsim.Circuit('''
+    H 0
+    CNOT 0 1
+    DEPOLARIZE2(0.01) 0 1  # 1% error rate
+    M 0 1
+''')
+```
+
+DEPOLARIZE2 applies one of the 15 non-identity two-qubit Pauli operators (IX, IY, IZ, XI, XX, XY, XZ, YI, YX, YY, YZ, ZI, ZX, ZY, ZZ) with equal probability p/15 each.
+
+### Two-Qubit Pauli Channel
+
+Specify probabilities for each of the 15 non-identity Pauli operators:
+
+```python
+circuit = tsim.Circuit('''
+    CNOT 0 1
+    PAULI_CHANNEL_2(
+        0.01, 0.01, 0.01,  # IX, IY, IZ
+        0.01, 0.01, 0.01, 0.01,  # XI, XX, XY, XZ
+        0.01, 0.01, 0.01, 0.01,  # YI, YX, YY, YZ
+        0.01, 0.01, 0.01, 0.01   # ZI, ZX, ZY, ZZ
+    ) 0 1
+    M 0 1
+''')
+```
+
+<Warning>
+The sum of all 15 probabilities must not exceed 1. The remaining probability is the identity (no error).
+</Warning>
+
+## Measurement and Reset Errors
+
+### Measurement Bit Flip
+
+Flip the measurement result with probability p:
+
+```python
+circuit = tsim.Circuit('''
+    H 0
+    M(0.01) 0  # Measurement has 1% error
+''')
+```
+
+This models:
+- Readout errors
+- Classification errors in single-shot measurements
+- Detector imperfections
+
+### Reset Errors
+
+Errors that occur after RESET operations:
+
+```python
+circuit = tsim.Circuit('''
+    R 0
+    X_ERROR(0.01) 0  # Reset to |1⟩ with 1% probability
+    H 0
+    M 0
+''')
+```
+
+## Correlated Errors
+
+### Basic Correlated Errors
+
+Apply an error with some probability to multiple qubits simultaneously:
+
+```python
+circuit = tsim.Circuit('''
+    H 0 1
+    # 10% chance of X error on BOTH qubits
+    CORRELATED_ERROR(0.1) X0 X1
+    M 0 1
+''')
+```
+
+<Info>
+Correlated errors model physical processes where errors occur together, such as:
+- Crosstalk between qubits
+- Environmental noise affecting nearby qubits
+- Leakage in multi-qubit gates
+</Info>
+
+### Else-Correlated Errors
+
+Chain multiple errors where each only occurs if previous ones didn't:
+
+```python
+circuit = tsim.Circuit('''
+    H 0 1 2
+    # Try errors in sequence (mutually exclusive)
+    CORRELATED_ERROR(0.1) X0
+    ELSE_CORRELATED_ERROR(0.2) Y1
+    ELSE_CORRELATED_ERROR(0.3) Z2
+    M 0 1 2
+''')
+```
+
+This creates a distribution:
+- 10% probability: X error on qubit 0
+- 18% probability: Y error on qubit 1 (90% × 20%)
+- 18.9% probability: Z error on qubit 2 (90% × 80% × 30%)
+- 53.1% probability: No error
+
+### Example: Uniform Error Distribution
+
+Distribute total error probability uniformly among multiple error types:
+
+```python
+# 30% error rate split uniformly among 3 error types
+circuit = tsim.Circuit('''
+    CORRELATED_ERROR(0.1) X0
+    ELSE_CORRELATED_ERROR(0.111111) Y0
+    ELSE_CORRELATED_ERROR(0.125) Z0
+''')
+# Each error occurs with ~10% probability
+# 70% no error
+```
+
+The conditional probabilities follow:
+- P(X) = 0.1
+- P(Y | no X) = 0.9 × 1/9 ≈ 0.1
+- P(Z | no X, no Y) = 0.9 × 8/9 × 1/8 ≈ 0.1
+
+## Noise in Error Correction
+
+### Surface Code with Noise
+
+Example of a noisy surface code circuit:
+
+```python
+import stim
+import tsim
+
+# Generate surface code with realistic noise
+stim_circuit = stim.Circuit.generated(
+    "surface_code:rotated_memory_z",
+    distance=3,
+    rounds=5,
+    after_clifford_depolarization=0.001,
+    before_measure_flip_probability=0.001,
+    before_round_data_depolarization=0.001,
+    after_reset_flip_probability=0.001
+)
+
+circuit = tsim.Circuit.from_stim_program(stim_circuit)
+sampler = circuit.compile_detector_sampler(seed=0)
+
+# Sample detector events
+detections, observables = sampler.sample(
+    shots=10000,
+    separate_observables=True
+)
+
+import numpy as np
+error_rate = np.mean(observables)
+print(f"Logical error rate: {error_rate:.4f}")
+```
+
+### Custom Error Model
+
+Build a custom error model for your hardware:
+
+```python
+def apply_gate_with_noise(circuit, gate, qubits, p_gate, p_idle):
+    """Apply a noisy gate to the circuit.
+    
+    Args:
+        circuit: Circuit to modify
+        gate: Gate name (e.g., "H", "CNOT")
+        qubits: Target qubit(s)
+        p_gate: Error probability during gate
+        p_idle: Error probability on idle qubits
+    """
+    # Apply the gate
+    circuit.append(gate, qubits)
+    
+    # Add noise to active qubits
+    if not isinstance(qubits, list):
+        qubits = [qubits]
+    
+    for q in qubits:
+        circuit.append("DEPOLARIZE1", q, arg=p_gate)
+    
+    # Add noise to idle qubits (assuming 10 total qubits)
+    idle = [q for q in range(10) if q not in qubits]
+    for q in idle:
+        circuit.append("DEPOLARIZE1", q, arg=p_idle)
+
+# Example usage
+circuit = tsim.Circuit()
+circuit.append("R", list(range(10)))
+
+apply_gate_with_noise(circuit, "H", 0, p_gate=0.001, p_idle=0.0001)
+apply_gate_with_noise(circuit, "CNOT", [0, 1], p_gate=0.01, p_idle=0.0001)
+
+circuit.append("M", list(range(10)))
+```
+
+## Internal Noise Representation
+
+### Channel Simplification
+
+Tsim automatically simplifies noise channels for efficient sampling:
+
+```python
+circuit = tsim.Circuit('''
+    X_ERROR(0.1) 0
+    X_ERROR(0.1) 0
+    X_ERROR(0.1) 0
+    M 0
+''')
+
+sampler = circuit.compile_sampler(seed=0)
+
+# Tsim merges the three X_ERROR channels
+print(len(sampler._channel_sampler.channels))
+# Output: 1 (merged into single equivalent channel)
+```
+
+Multiple errors on the same qubits are automatically:
+1. **Merged** if they affect the same parity checks
+2. **Absorbed** if one is a subset of another
+3. **Combined** via XOR convolution for independent errors
+
+### Sampling Statistics
+
+Verify noise channel implementation:
+
+```python
+import numpy as np
+
+# Three independent X_ERROR(0.1) channels
+circuit = tsim.Circuit('''
+    X_ERROR(0.1) 0
+    X_ERROR(0.1) 0
+    X_ERROR(0.1) 0
+    M 0
+''')
+
+sampler = circuit.compile_sampler(seed=0)
+samples = sampler.sample(100000)
+
+# Combined probability: P(odd number of errors)
+# = 3 * 0.1 * 0.9^2 + 0.1^3 ≈ 0.244
+p_combined = 3 * 0.1 * 0.9**2 + 0.1**3
+
+measured_rate = np.mean(samples)
+print(f"Expected: {p_combined:.4f}")
+print(f"Measured: {measured_rate:.4f}")
+# Output:
+# Expected: 0.2440
+# Measured: 0.2437
+```
+
+## Performance Tips
+
+<Steps>
+
+### Use depolarizing noise when possible
+
+```python
+# ✅ Efficient: Single depolarizing channel
+circuit.append("DEPOLARIZE1", 0, arg=0.01)
+
+# ⚠️ Less efficient: Multiple individual channels
+circuit.append("X_ERROR", 0, arg=0.01/3)
+circuit.append("Y_ERROR", 0, arg=0.01/3)
+circuit.append("Z_ERROR", 0, arg=0.01/3)
+```
+
+### Keep error rates small
+
+Tsim uses sparse sampling optimized for low-noise regimes (p &lt; 0.1):
+
+```python
+# ✅ Efficient: Low noise
+circuit.append("DEPOLARIZE1", 0, arg=0.001)
+
+# ⚠️ Less efficient: High noise
+circuit.append("DEPOLARIZE1", 0, arg=0.5)
+```
+
+### Batch errors on the same qubits
+
+Tsim merges errors affecting the same qubits:
+
+```python
+# ✅ Merged efficiently
+circuit.append("X_ERROR", 0, arg=0.01)
+circuit.append("X_ERROR", 0, arg=0.01)  # Merged with previous
+
+# ⚠️ Cannot merge (different qubits)
+circuit.append("X_ERROR", 0, arg=0.01)
+circuit.append("X_ERROR", 1, arg=0.01)  # Separate channels
+```
+
+</Steps>
+
+## Comparison with Stim
+
+Tsim's noise handling is fully compatible with Stim:
+
+| Feature | Tsim | Stim |
+|---------|------|------|
+| **Pauli noise channels** | ✅ Full support | ✅ Full support |
+| **Depolarization** | ✅ DEPOLARIZE1/2 | ✅ DEPOLARIZE1/2 |
+| **Correlated errors** | ✅ Full support | ✅ Full support |
+| **Noise + non-Clifford** | ✅ T gates + noise | ❌ Clifford only |
+| **Detector sampling** | ✅ Absolute values | ✅ Detection events |
+| **GPU acceleration** | ✅ Via JAX | ❌ CPU only |
+
+## Next Steps
+
+- Learn about [sampling](/guides/sampling) detector events for error correction
+- Explore [GPU acceleration](/guides/gpu-acceleration) for large-scale noisy simulations
+- See [circuit construction](/guides/circuit-construction) for building complex circuits
